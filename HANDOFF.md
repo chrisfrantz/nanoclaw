@@ -19,6 +19,7 @@ Date: 2026-02-02
 - Fixed Codex structured output schema to satisfy strict JSON schema requirements (all action fields required; unused fields null).
 - Added model routing with per-chat preferences and keyword-based auto selection (code/chat/write) plus command handling.
 - Added rolling conversation context (last 40 messages) and stored outgoing bot replies in SQLite so context persists even if Codex session resume fails.
+- Deduplicated send_message actions that matched reply text to prevent double replies.
 
 ## Assumptions
 - Codex CLI is installed in the container via `npm install -g @openai/codex`.
