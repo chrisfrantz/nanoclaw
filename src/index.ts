@@ -90,7 +90,9 @@ function shouldAutoReview(content: string): boolean {
     'lint',
     'typecheck'
   ];
-  return keywords.some(k => lowered.includes(k));
+  const hasCodeFence = content.includes('```');
+  const hasLikelyCode = /{[^}]*}|<\/?[a-z][\s\S]*>|=\s*[^=]|;\s*$/.test(content);
+  return keywords.some(k => lowered.includes(k)) || hasCodeFence || hasLikelyCode;
 }
 
 function buildReviewPrompt(userContent: string, assistantDraft: string): string {
@@ -200,6 +202,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
     }
 
     const shouldReview = isMainGroup && shouldAutoReview(strippedContent);
+    logger.info({ shouldReview, chatJid: msg.chat_jid }, 'Review check');
     if (shouldReview) {
       const reviewPrompt = buildReviewPrompt(strippedContent, response);
       const reviewModel = { model: 'gpt-5.2-codex', reasoningEffort: 'high' as const };
