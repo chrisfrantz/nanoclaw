@@ -1,6 +1,6 @@
 # NanoClaw Specification
 
-A personal Codex assistant accessible via WhatsApp, with persistent memory per conversation, scheduled tasks, and email integration.
+A personal Codex assistant accessible via Telegram, with persistent memory per conversation, scheduled tasks, and email integration.
 
 ---
 
@@ -29,8 +29,8 @@ A personal Codex assistant accessible via WhatsApp, with persistent memory per c
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  ┌──────────────┐                     ┌────────────────────┐        │
-│  │  WhatsApp    │────────────────────▶│   SQLite Database  │        │
-│  │  (baileys)   │◀────────────────────│   (messages.db)    │        │
+│  │  Telegram    │────────────────────▶│   SQLite Database  │        │
+│  │ (Bot API)    │◀────────────────────│   (messages.db)    │        │
 │  └──────────────┘   store/send        └─────────┬──────────┘        │
 │                                                  │                   │
 │         ┌────────────────────────────────────────┘                   │
@@ -73,7 +73,7 @@ A personal Codex assistant accessible via WhatsApp, with persistent memory per c
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
-| WhatsApp Connection | Node.js (@whiskeysockets/baileys) | Connect to WhatsApp, send/receive messages |
+| Telegram Connection | Node.js (Telegraf) | Connect to Telegram Bot API, send/receive messages |
 | Message Storage | SQLite (better-sqlite3) | Store messages for polling |
 | Container Runtime | Apple Container | Isolated Linux VMs for agent execution |
 | Agent | Codex CLI | Run Codex with file/system access and IPC actions |
@@ -105,12 +105,11 @@ nanoclaw/
 ├── .gitignore
 │
 ├── src/
-│   ├── index.ts                   # Main application (WhatsApp + routing)
+│   ├── index.ts                   # Main application (Telegram + routing)
 │   ├── config.ts                  # Configuration constants
 │   ├── types.ts                   # TypeScript interfaces
 │   ├── utils.ts                   # Generic utility functions
 │   ├── db.ts                      # Database initialization and queries
-│   ├── whatsapp-auth.ts           # Standalone WhatsApp authentication
 │   ├── task-scheduler.ts          # Runs scheduled tasks when due
 │   └── container-runner.ts        # Spawns agents in Apple Containers
 │
@@ -138,7 +137,6 @@ nanoclaw/
 │       └── *.md                   # Files created by the agent
 │
 ├── store/                         # Local data (gitignored)
-│   ├── auth/                      # WhatsApp authentication state
 │   └── messages.db                # SQLite database (messages, scheduled_tasks, task_run_logs)
 │
 ├── data/                          # Application state (gitignored)
@@ -192,7 +190,7 @@ Groups can have additional directories mounted via `containerConfig` in `data/re
 
 ```json
 {
-  "1234567890@g.us": {
+  "telegram:79057070": {
     "name": "Dev Team",
     "folder": "dev-team",
     "trigger": "@Andy",
@@ -225,6 +223,15 @@ CODEX_API_KEY=sk-...
 
 Only the authentication variable (`CODEX_API_KEY`) is extracted from `.env` and mounted into the container at `/workspace/env-dir/env`, then sourced by the entrypoint script. This ensures other environment variables in `.env` are not exposed to the agent. This workaround is needed because Apple Container loses `-e` environment variables when using `-i` (interactive mode with piped stdin).
 
+Telegram configuration also lives in `.env` (host-only, not mounted into containers):
+
+```bash
+TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
+TELEGRAM_AUTO_REGISTER=true
+TELEGRAM_ALLOWED_USER_IDS=123456789
+TELEGRAM_ALLOWED_USERNAMES=yourusername
+```
+
 ### Changing the Assistant Name
 
 Set the `ASSISTANT_NAME` environment variable:
@@ -234,8 +241,7 @@ ASSISTANT_NAME=Bot npm start
 ```
 
 Or edit the default in `src/config.ts`. This changes:
-- The trigger pattern (messages must start with `@YourName`)
-- The response prefix (`YourName:` added automatically)
+- The trigger pattern (messages must start with `@YourName` in non-main groups)
 
 ### Placeholder Values in launchd
 
@@ -304,10 +310,10 @@ Sessions enable conversation continuity - Codex resumes prior context.
 ### Incoming Message Flow
 
 ```
-1. User sends WhatsApp message
+1. User sends Telegram message
    │
    ▼
-2. Baileys receives message via WhatsApp Web protocol
+2. Telegraf receives message via Telegram Bot API
    │
    ▼
 3. Message stored in SQLite (store/messages.db)
@@ -339,7 +345,7 @@ Sessions enable conversation continuity - Codex resumes prior context.
    └── Uses shell/tools as needed (files, browser automation)
    │
    ▼
-9. Router prefixes response with assistant name and sends via WhatsApp
+9. Router sends response via Telegram Bot API
    │
    ▼
 10. Router updates last agent timestamp and saves session ID
@@ -347,7 +353,7 @@ Sessions enable conversation continuity - Codex resumes prior context.
 
 ### Trigger Word Matching
 
-Messages must start with the trigger pattern (default: `@Andy`):
+Main group responds to all messages. Other groups require the trigger pattern (default: `@Andy`):
 - `@Andy what's the weather?` → ✅ Triggers Codex
 - `@andy help me` → ✅ Triggers (case insensitive)
 - `Hey @Andy` → ❌ Ignored (trigger not at start)
@@ -470,8 +476,8 @@ Codex returns a structured JSON response with an `actions` array. The host watch
 | `pause_task` | Pause a task |
 | `resume_task` | Resume a paused task |
 | `cancel_task` | Delete a task |
-| `send_message` | Send a WhatsApp message to the group |
-| `register_group` | Register a new WhatsApp group (main only) |
+| `send_message` | Send a Telegram message to the chat |
+| `register_group` | Register a new Telegram chat (main only) |
 | `refresh_groups` | Refresh available groups list (main only) |
 
 ---
@@ -486,7 +492,7 @@ When NanoClaw starts, it:
 1. **Ensures Apple Container system is running** - Automatically starts it if needed (survives reboots)
 2. Initializes the SQLite database
 3. Loads state (registered groups, sessions, router state)
-4. Connects to WhatsApp
+4. Starts the Telegram bot
 5. Starts the message polling loop
 6. Starts the scheduler loop
 7. Starts the IPC watcher for container messages
@@ -563,7 +569,7 @@ All agents run inside Apple Container (lightweight Linux VMs), providing:
 
 ### Prompt Injection Risk
 
-WhatsApp messages could contain malicious instructions attempting to manipulate Codex's behavior.
+Telegram messages could contain malicious instructions attempting to manipulate Codex's behavior.
 
 **Mitigations:**
 - Container isolation limits blast radius
@@ -584,7 +590,7 @@ WhatsApp messages could contain malicious instructions attempting to manipulate 
 | Credential | Storage Location | Notes |
 |------------|------------------|-------|
 | Codex CLI Auth | data/sessions/{group}/.codex/ | Per-group isolation, mounted to /home/node/.codex/ |
-| WhatsApp Session | store/auth/ | Auto-created, persists ~20 days |
+| Telegram Bot Token | .env | Stored on host only |
 
 ### File Permissions
 
@@ -606,7 +612,7 @@ chmod 700 groups/
 | "Codex CLI process exited with code 1" | Session mount path wrong | Ensure mount is to `/home/node/.codex/` not `/root/.codex/` |
 | Session not continuing | Session ID not saved | Check `data/sessions.json` |
 | Session not continuing | Mount path mismatch | Container user is `node` with HOME=/home/node; sessions must be at `/home/node/.codex/` |
-| "QR code expired" | WhatsApp session expired | Delete store/auth/ and restart |
+| "Unauthorized" | Telegram bot token invalid | Update `TELEGRAM_BOT_TOKEN` and restart |
 | "No groups registered" | Haven't added groups | Use `@Andy add group "Name"` in main |
 
 ### Log Location

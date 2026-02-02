@@ -27,12 +27,9 @@ Read the MEMORY.md files in each folder for role-specific context and workflows.
 - Team: Gavriel (founder, sales & client work), Lazer (founder, dealflow), Ali (PM)
 - Obsidian-based workflow with Kanban boards (PIPELINE.md, PORTFOLIO.md)
 
-## WhatsApp Formatting
+## Telegram Formatting
 
-Do NOT use markdown headings (##) in WhatsApp messages. Only use:
-- *Bold* (asterisks)
-- _Italic_ (underscores)
-- • Bullets (bullet points)
-- ```Code blocks``` (triple backticks)
-
-Keep messages clean and readable for WhatsApp.
+Telegram supports Markdown. Keep messages clean and readable:
+- Use headings and bullets sparingly
+- Prefer short paragraphs
+- Use code blocks for commands or snippets

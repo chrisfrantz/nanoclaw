@@ -1,11 +1,11 @@
 ---
 name: setup
-description: Run initial NanoClaw setup. Use when user wants to install dependencies, authenticate WhatsApp, register their main channel, or start the background services. Triggers on "setup", "install", "configure nanoclaw", or first-time setup requests.
+description: Run initial NanoClaw setup. Use when user wants to install dependencies, authenticate Telegram, register their main channel, or start the background services. Triggers on "setup", "install", "configure nanoclaw", or first-time setup requests.
 ---
 
 # NanoClaw Setup
 
-Run all commands automatically. Only pause when user action is required (scanning QR codes).
+Run all commands automatically. Only pause when user action is required (creating bot tokens, sending a test message).
 
 ## 1. Install Dependencies
 
@@ -73,13 +73,28 @@ Tell the user:
 
 ## 3. Configure Codex Authentication
 
-Ask the user for an OpenAI API key for Codex and create `.env`:
+Ask the user if they want to use **Codex OAuth** (preferred) or an **API key**.
+
+### Option A: Codex OAuth (recommended)
+
+Verify the user is logged in with Codex CLI and copy the auth file into the main session:
+
+```bash
+codex login status || true
+mkdir -p data/sessions/main/.codex
+cp ~/.codex/auth.json data/sessions/main/.codex/auth.json
+chmod 600 data/sessions/main/.codex/auth.json
+```
+
+### Option B: API key
+
+Create `.env` and set the key:
 
 ```bash
 echo 'CODEX_API_KEY=' > .env
 ```
 
-Tell the user to paste their key, then verify:
+Then verify:
 
 ```bash
 KEY=$(grep "^CODEX_API_KEY=" .env | cut -d= -f2)
@@ -106,25 +121,31 @@ else
 fi
 ```
 
-## 5. WhatsApp Authentication
+## 5. Telegram Bot Setup
 
 **USER ACTION REQUIRED**
 
-Run the authentication script:
+Ask the user to create a Telegram bot with `@BotFather` and provide the bot token.
+
+Store the token in `.env`:
 
 ```bash
-npm run auth
+echo "TELEGRAM_BOT_TOKEN=${TOKEN}" >> .env
 ```
 
-Tell the user:
-> A QR code will appear. On your phone:
-> 1. Open WhatsApp
-> 2. Tap **Settings → Linked Devices → Link a Device**
-> 3. Scan the QR code
+Validate the token:
 
-Wait for the script to output "Successfully authenticated" then continue.
+```bash
+TOKEN=$(grep "^TELEGRAM_BOT_TOKEN=" .env | cut -d= -f2)
+curl -s "https://api.telegram.org/bot${TOKEN}/getMe"
+```
 
-If it says "Already authenticated", skip to the next step.
+Optional: If the user wants to restrict access, set allowlists:
+
+```bash
+echo "TELEGRAM_ALLOWED_USER_IDS=123456789" >> .env
+echo "TELEGRAM_ALLOWED_USERNAMES=yourusername" >> .env
+```
 
 ## 6. Configure Assistant Name
 
@@ -142,35 +163,24 @@ Store their choice - you'll use it when creating the registered_groups.json and 
 
 ## 7. Register Main Channel
 
-Ask the user:
-> Do you want to use your **personal chat** (message yourself) or a **WhatsApp group** as your main control channel?
+For Telegram, the first **private DM** can auto-register as the main channel.
 
-For personal chat:
-> Send any message to yourself in WhatsApp (the "Message Yourself" chat). Tell me when done.
-
-For group:
-> Send any message in the WhatsApp group you want to use as your main channel. Tell me when done.
-
-After user confirms, start the app briefly to capture the message:
+Start the app briefly and ask the user to send a DM to the bot while it's running:
 
 ```bash
-timeout 10 npm run dev || true
+timeout 15 npm run dev || true
 ```
 
-Then find the JID from the database:
+If auto-registration is disabled (`TELEGRAM_AUTO_REGISTER=false`), manually register the chat by querying the DB and writing `data/registered_groups.json`:
 
 ```bash
-# For personal chat (ends with @s.whatsapp.net)
-sqlite3 store/messages.db "SELECT DISTINCT chat_jid FROM messages WHERE chat_jid LIKE '%@s.whatsapp.net' ORDER BY timestamp DESC LIMIT 5"
-
-# For group (ends with @g.us)
-sqlite3 store/messages.db "SELECT DISTINCT chat_jid FROM messages WHERE chat_jid LIKE '%@g.us' ORDER BY timestamp DESC LIMIT 5"
+sqlite3 store/messages.db "SELECT DISTINCT chat_jid FROM messages WHERE chat_jid LIKE 'telegram:%' ORDER BY timestamp DESC LIMIT 5"
 ```
 
-Create/update `data/registered_groups.json` using the JID from above and the assistant name from step 5:
+Then update `data/registered_groups.json`:
 ```json
 {
-  "JID_HERE": {
+  "telegram:CHAT_ID": {
     "name": "main",
     "folder": "main",
     "trigger": "@ASSISTANT_NAME",
@@ -231,7 +241,7 @@ For each directory they provide, ask:
 ### 8b. Configure Non-Main Group Access
 
 Ask the user:
-> Should **non-main groups** (other WhatsApp chats you add later) be restricted to **read-only** access even if read-write is allowed for the directory?
+> Should **non-main groups** (other Telegram chats you add later) be restricted to **read-only** access even if read-write is allowed for the directory?
 >
 > Recommended: **Yes** - this prevents other groups from modifying files even if you grant them access to a directory.
 
@@ -361,7 +371,7 @@ Check the logs:
 tail -f logs/nanoclaw.log
 ```
 
-The user should receive a response in WhatsApp.
+The user should receive a response in Telegram.
 
 ## Troubleshooting
 
@@ -378,9 +388,9 @@ The user should receive a response in WhatsApp.
 - Check that the chat JID is in `data/registered_groups.json`
 - Check `logs/nanoclaw.log` for errors
 
-**WhatsApp disconnected**:
-- The service will show a macOS notification
-- Run `npm run auth` to re-authenticate
+**Telegram bot not responding**:
+- Verify `TELEGRAM_BOT_TOKEN` is correct
+- Check `logs/nanoclaw.log` for errors
 - Restart the service: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
 
 **Unload service**:

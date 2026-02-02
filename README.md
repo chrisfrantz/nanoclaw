@@ -42,7 +42,7 @@ Then run `/setup`. Codex CLI handles everything: dependencies, authentication, c
 
 ## What It Supports
 
-- **WhatsApp I/O** - Message Codex from your phone
+- **Telegram I/O** - Message Codex from your phone or desktop
 - **Isolated group context** - Each group has its own `MEMORY.md` memory, isolated filesystem, and runs in its own container sandbox with only that filesystem mounted
 - **Main channel** - Your private channel (self-chat) for admin control; every other group is completely isolated
 - **Scheduled tasks** - Recurring jobs that run Codex and can message you back
@@ -84,7 +84,7 @@ The codebase is small enough that Codex can safely modify it.
 
 **Don't add features. Add skills.**
 
-If you want to add Telegram support, don't create a PR that adds Telegram alongside WhatsApp. Instead, contribute a skill file (`.codex/skills/add-telegram/SKILL.md`) that teaches Codex CLI how to transform a NanoClaw installation to use Telegram.
+If you want to add WhatsApp support, don't create a PR that adds WhatsApp alongside Telegram. Instead, contribute a skill file (`.codex/skills/add-whatsapp/SKILL.md`) that teaches Codex CLI how to transform a NanoClaw installation to use WhatsApp.
 
 Users then run `/add-telegram` on their fork and get clean code that does exactly what they need, not a bloated system trying to support every use case.
 
@@ -93,7 +93,7 @@ Users then run `/add-telegram` on their fork and get clean code that does exactl
 Skills we'd love to see:
 
 **Communication Channels**
-- `/add-telegram` - Add Telegram as channel. Should give the user option to replace WhatsApp or add as additional channel. Also should be possible to add it as a control channel (where it can trigger actions) or just a channel that can be used in actions triggered elsewhere
+- `/add-whatsapp` - Add WhatsApp as channel. Should give the user option to replace Telegram or add as additional channel. Also should be possible to add it as a control channel (where it can trigger actions) or just a channel that can be used in actions triggered elsewhere
 - `/add-slack` - Add Slack
 - `/add-discord` - Add Discord
 
@@ -113,13 +113,13 @@ Skills we'd love to see:
 ## Architecture
 
 ```
-WhatsApp (baileys) --> SQLite --> Polling loop --> Container (Codex CLI) --> Response
+Telegram (Bot API) --> SQLite --> Polling loop --> Container (Codex CLI) --> Response
 ```
 
 Single Node.js process. Agents execute in isolated Linux containers with mounted directories. IPC via filesystem. No daemons, no queues, no complexity.
 
 Key files:
-- `src/index.ts` - Main app: WhatsApp connection, routing, IPC
+- `src/index.ts` - Main app: Telegram connection, routing, IPC
 - `src/container-runner.ts` - Spawns agent containers
 - `src/task-scheduler.ts` - Runs scheduled tasks
 - `src/db.ts` - SQLite operations
@@ -127,9 +127,9 @@ Key files:
 
 ## FAQ
 
-**Why WhatsApp and not Telegram/Signal/etc?**
+**Why Telegram and not WhatsApp/Signal/etc?**
 
-Because I use WhatsApp. Fork it and run a skill to change it. That's the whole point.
+Because I use Telegram. Fork it and run a skill to change it. That's the whole point.
 
 **Why Apple Container instead of Docker?**
 

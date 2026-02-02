@@ -24,7 +24,7 @@ Instead of application-level permission systems trying to prevent agents from ac
 
 ### Built for One User
 
-This isn't a framework or a platform. It's working software for my specific needs. I use WhatsApp and Email, so it supports WhatsApp and Email. I don't use Telegram, so it doesn't support Telegram. I add the integrations I actually want, not every possible integration.
+This isn't a framework or a platform. It's working software for my specific needs. I use Telegram and Email, so it supports Telegram and Email. I don't use WhatsApp, so it doesn't support WhatsApp. I add the integrations I actually want, not every possible integration.
 
 ### Customization = Code Changes
 
@@ -38,7 +38,7 @@ The codebase assumes you have an AI collaborator. It doesn't need to be excessiv
 
 ### Skills Over Features
 
-When people contribute, they shouldn't add "Telegram support alongside WhatsApp." They should contribute a skill like `/add-telegram` that transforms the codebase. Users fork the repo, run skills to customize, and end up with clean code that does exactly what they need - not a bloated system trying to support everyone's use case simultaneously.
+When people contribute, they shouldn't add "WhatsApp support alongside Telegram." They should contribute a skill like `/add-whatsapp` that transforms the codebase. Users fork the repo, run skills to customize, and end up with clean code that does exactly what they need - not a bloated system trying to support everyone's use case simultaneously.
 
 ---
 
@@ -52,7 +52,7 @@ Skills to add or switch to different messaging platforms:
 - `/add-slack` - Add Slack as an input channel
 - `/add-discord` - Add Discord as an input channel
 - `/add-sms` - Add SMS via Twilio or similar
-- `/convert-to-telegram` - Replace WhatsApp with Telegram entirely
+- `/convert-to-whatsapp` - Replace Telegram with WhatsApp entirely
 
 ### Container Runtime
 The project currently uses Apple Container (macOS-only). We need:
@@ -67,19 +67,19 @@ The project currently uses Apple Container (macOS-only). We need:
 
 ## Vision
 
-A personal Codex assistant accessible via WhatsApp, with minimal custom code.
+A personal Codex assistant accessible via Telegram, with minimal custom code.
 
 **Core components:**
 - **Codex CLI** as the core agent
 - **Apple Container** for isolated agent execution (Linux VMs)
-- **WhatsApp** as the primary I/O channel
+- **Telegram** as the primary I/O channel
 - **Persistent memory** per conversation and globally
 - **Scheduled tasks** that run Codex and can message back
 - **Web access** via shell tools and browser automation
 - **Browser automation** via agent-browser
 
 **Implementation approach:**
-- Use existing tools (WhatsApp connector, Codex CLI, IPC actions)
+- Use existing tools (Telegram bot, Codex CLI, IPC actions)
 - Minimal glue code
 - File-based systems where possible (MEMORY.md for memory, folders for groups)
 
@@ -88,7 +88,7 @@ A personal Codex assistant accessible via WhatsApp, with minimal custom code.
 ## Architecture Decisions
 
 ### Message Routing
-- A router listens to WhatsApp and routes messages based on configuration
+- A router listens to Telegram and routes messages based on configuration
 - Only messages from registered groups are processed
 - Trigger: `@Andy` prefix (case insensitive), configurable via `ASSISTANT_NAME` env var
 - Unregistered groups are ignored completely
@@ -137,8 +137,8 @@ A personal Codex assistant accessible via WhatsApp, with minimal custom code.
 
 ## Integration Points
 
-### WhatsApp
-- Using baileys library for WhatsApp Web connection
+### Telegram
+- Using the Telegram Bot API (Telegraf) for messaging
 - Messages stored in SQLite, polled by router
 - QR code authentication during setup
 
@@ -171,7 +171,7 @@ A personal Codex assistant accessible via WhatsApp, with minimal custom code.
 - Each user gets a custom setup matching their exact needs
 
 ### Skills
-- `/setup` - Install dependencies, authenticate WhatsApp, configure scheduler, start services
+- `/setup` - Install dependencies, authenticate Telegram bot, configure scheduler, start services
 - `/customize` - General-purpose skill for adding capabilities (new channels like Telegram, new integrations, behavior changes)
 
 ### Deployment
@@ -187,7 +187,7 @@ These are the creator's settings, stored here for reference:
 - **Trigger**: `@Andy` (case insensitive)
 - **Response prefix**: `Andy:`
 - **Persona**: Default Codex (no custom personality)
-- **Main channel**: Self-chat (messaging yourself in WhatsApp)
+- **Main channel**: Personal Telegram DM (messaging your bot)
 
 ---
 

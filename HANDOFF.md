@@ -10,11 +10,20 @@ Date: 2026-02-02
 - Updated docs and skills to reflect Codex, IPC actions, and new file paths.
 - Removed legacy `.mcp.json` and Claude-specific SDK references.
 
+## Update (Telegram Swap)
+- Replaced WhatsApp/Baileys I/O with Telegram Bot API (Telegraf) in `src/index.ts`.
+- Added Telegram env config (`TELEGRAM_BOT_TOKEN`, optional allowlists, auto-register first DM).
+- Removed WhatsApp auth flow and dependencies; updated docs/skills for Telegram.
+- Adjusted DB message storage to use explicit message fields (no Baileys proto).
+- Updated group memory formatting notes for Telegram.
+
 ## Assumptions
 - Codex CLI is installed in the container via `npm install -g @openai/codex`.
 - Codex authentication uses `CODEX_API_KEY` (single env var).
 - Codex resumes prior sessions with `codex exec resume --last` when a marker exists.
 - Web access is via shell tools (curl/wget) + `agent-browser` rather than built-in WebSearch/WebFetch.
+- Telegram bot token will be provided in `.env` as `TELEGRAM_BOT_TOKEN`.
+- First private DM will auto-register as `main` unless `TELEGRAM_AUTO_REGISTER=false`.
 
 ## Remaining / Follow-ups
 - Build the container image after pulling (`./container/build.sh`) so Codex CLI and schema are included.
@@ -22,3 +31,4 @@ Date: 2026-02-02
 - Validate session behavior across messages in real usage (Codex resume behavior may differ).
 - Legacy MCP-based skills (`add-gmail`, `add-parallel`) need IPC-action ports if you want those features.
 - If you rely on automatic conversation compaction/archiving, Codex doesn’t provide Claude SDK hooks—summaries should be written to `MEMORY.md` manually or via a new action/automation.
+- Provide Telegram bot token and send first DM to auto-register the main chat.

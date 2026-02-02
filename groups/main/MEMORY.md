@@ -41,15 +41,12 @@ Read the MEMORY.md files in each folder for role-specific context and workflows.
 - Team: Gavriel (founder, sales & client work), Lazer (founder, dealflow), Ali (PM)
 - Obsidian-based workflow with Kanban boards (PIPELINE.md, PORTFOLIO.md)
 
-## WhatsApp Formatting
+## Telegram Formatting
 
-Do NOT use markdown headings (##) in WhatsApp messages. Only use:
-- *Bold* (asterisks)
-- _Italic_ (underscores)
-- • Bullets (bullet points)
-- ```Code blocks``` (triple backticks)
-
-Keep messages clean and readable for WhatsApp.
+Telegram supports Markdown. Keep messages clean and readable:
+- Use headings and bullets sparingly
+- Prefer short paragraphs
+- Use code blocks for commands or snippets
 
 ---
 
@@ -83,8 +80,8 @@ Available groups are provided in `/workspace/ipc/available_groups.json`:
 {
   "groups": [
     {
-      "jid": "120363336345536173@g.us",
-      "name": "Family Chat",
+      "jid": "telegram:79057070",
+      "name": "Personal DM",
       "lastActivity": "2026-01-31T12:00:00.000Z",
       "isRegistered": false
     }
@@ -93,7 +90,7 @@ Available groups are provided in `/workspace/ipc/available_groups.json`:
 }
 ```
 
-Groups are ordered by most recent activity. The list is synced from WhatsApp daily.
+Chats are ordered by most recent activity. The list updates as messages arrive.
 
 If a group the user mentions isn't in the list, use the `refresh_groups` action, then re-read `available_groups.json`.
 
@@ -103,7 +100,7 @@ If a group the user mentions isn't in the list, use the `refresh_groups` action,
 sqlite3 /workspace/project/store/messages.db "
   SELECT jid, name, last_message_time
   FROM chats
-  WHERE jid LIKE '%@g.us' AND jid != '__group_sync__'
+  WHERE jid LIKE 'telegram:%' AND jid != '__group_sync__'
   ORDER BY last_message_time DESC
   LIMIT 10;
 "
@@ -115,9 +112,9 @@ Groups are registered in `/workspace/project/data/registered_groups.json`:
 
 ```json
 {
-  "1234567890-1234567890@g.us": {
-    "name": "Family Chat",
-    "folder": "family-chat",
+  "telegram:79057070": {
+    "name": "Personal DM",
+    "folder": "main",
     "trigger": "@Andy",
     "added_at": "2024-01-31T12:00:00.000Z"
   }
@@ -125,7 +122,7 @@ Groups are registered in `/workspace/project/data/registered_groups.json`:
 ```
 
 Fields:
-- **Key**: The WhatsApp JID (unique identifier for the chat)
+- **Key**: The Telegram chat ID, prefixed with `telegram:`
 - **name**: Display name for the group
 - **folder**: Folder name under `groups/` for this group's files and memory
 - **trigger**: The trigger word (usually same as global, but could differ)
