@@ -361,7 +361,6 @@ async function runCodex(prompt: string, resume: boolean, model?: string, reasoni
   const args = [
     'exec',
     ...(resume ? ['resume', '--last'] : []),
-    '--color', 'never',
     '--skip-git-repo-check',
     ...(model ? ['--model', model] : []),
     ...(reasoningEffort ? ['--config', `model_reasoning_effort="${reasoningEffort}"`] : []),
