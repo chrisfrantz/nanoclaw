@@ -16,6 +16,7 @@ Date: 2026-02-02
 - Removed WhatsApp auth flow and dependencies; updated docs/skills for Telegram.
 - Adjusted DB message storage to use explicit message fields (no Baileys proto).
 - Updated group memory formatting notes for Telegram.
+- Fixed Codex structured output schema to satisfy strict JSON schema requirements (all action fields required; unused fields null).
 
 ## Assumptions
 - Codex CLI is installed in the container via `npm install -g @openai/codex`.
