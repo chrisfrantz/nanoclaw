@@ -120,6 +120,8 @@ function buildPrompt(input: ContainerInput): string {
     scheduledNote,
     '',
     'Output MUST be a single JSON object that matches the provided schema.',
+    'For normal replies, use the "reply" field and do NOT call send_message.',
+    'Use send_message only for additional follow-ups or scheduled tasks.',
     'Every action object MUST include all action fields; use null for fields that do not apply.',
     '- reply: the message to send back to the triggering chat (no assistant name prefix).',
     '- actions: array of side-effects to request from the host (can be empty).',
@@ -431,13 +433,20 @@ async function main(): Promise<void> {
 
   try {
     const response = await runCodexWithFallback(prompt, shouldResume, input.model, input.reasoningEffort);
-    const warnings = processActions(response.actions || [], input);
+    const replyTrimmed = (response.reply || '').trim();
+    const actionsFiltered = (response.actions || []).filter(action => {
+      if (action.type !== 'send_message') return true;
+      if (!('text' in action)) return true;
+      const actionText = typeof action.text === 'string' ? action.text.trim() : '';
+      return !(replyTrimmed && actionText && actionText === replyTrimmed);
+    });
+    const warnings = processActions(actionsFiltered, input);
 
     const warningText = warnings.length > 0
       ? `\n\nWarnings:\n- ${warnings.join('\n- ')}`
       : '';
 
-    const replyText = (response.reply || '').trim() + warningText;
+    const replyText = replyTrimmed + warningText;
     const result = replyText.trim() ? replyText.trim() : null;
 
     const shouldTrackSession = !input.isScheduledTask || Boolean(input.sessionId);
