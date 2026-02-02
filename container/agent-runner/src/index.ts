@@ -16,6 +16,8 @@ interface ContainerInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  model?: string;
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }
 
 interface ContainerOutput {
@@ -345,13 +347,15 @@ function runCodexCommand(args: string[]): Promise<{ code: number; stdout: string
   });
 }
 
-async function runCodex(prompt: string, resume: boolean): Promise<AgentResponse> {
+async function runCodex(prompt: string, resume: boolean, model?: string, reasoningEffort?: 'low' | 'medium' | 'high'): Promise<AgentResponse> {
   const outputPath = path.join('/tmp', `codex-output-${crypto.randomUUID()}.json`);
   const args = [
     'exec',
     ...(resume ? ['resume', '--last'] : []),
     '--color', 'never',
     '--skip-git-repo-check',
+    ...(model ? ['--model', model] : []),
+    ...(reasoningEffort ? ['--config', `model_reasoning_effort="${reasoningEffort}"`] : []),
     '--output-schema', RESPONSE_SCHEMA_PATH,
     '--output-last-message', outputPath,
     '--dangerously-bypass-approvals-and-sandbox',
@@ -388,16 +392,21 @@ async function runCodex(prompt: string, resume: boolean): Promise<AgentResponse>
   }
 }
 
-async function runCodexWithFallback(prompt: string, resume: boolean): Promise<AgentResponse> {
+async function runCodexWithFallback(
+  prompt: string,
+  resume: boolean,
+  model?: string,
+  reasoningEffort?: 'low' | 'medium' | 'high'
+): Promise<AgentResponse> {
   if (!resume) {
-    return runCodex(prompt, false);
+    return runCodex(prompt, false, model, reasoningEffort);
   }
 
   try {
-    return await runCodex(prompt, true);
+    return await runCodex(prompt, true, model, reasoningEffort);
   } catch (err) {
     log(`Resume failed, retrying without resume: ${err instanceof Error ? err.message : String(err)}`);
-    return runCodex(prompt, false);
+    return runCodex(prompt, false, model, reasoningEffort);
   }
 }
 
@@ -421,7 +430,7 @@ async function main(): Promise<void> {
   const shouldResume = Boolean(input.sessionId);
 
   try {
-    const response = await runCodexWithFallback(prompt, shouldResume);
+    const response = await runCodexWithFallback(prompt, shouldResume, input.model, input.reasoningEffort);
     const warnings = processActions(response.actions || [], input);
 
     const warningText = warnings.length > 0

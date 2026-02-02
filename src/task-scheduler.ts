@@ -6,6 +6,7 @@ import { getDueTasks, updateTaskAfterRun, logTaskRun, getTaskById, getAllTasks }
 import { ScheduledTask, RegisteredGroup } from './types.js';
 import { GROUPS_DIR, SCHEDULER_POLL_INTERVAL, DATA_DIR, MAIN_GROUP_FOLDER, TIMEZONE } from './config.js';
 import { runContainerAgent, writeTasksSnapshot } from './container-runner.js';
+import { loadModelPrefs, resolveModelSelection } from './model-routing.js';
 
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
@@ -62,13 +63,16 @@ async function runTask(task: ScheduledTask, deps: SchedulerDependencies): Promis
   const sessionId = task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
 
   try {
+    const modelSelection = resolveModelSelection(task.prompt, task.chat_jid, loadModelPrefs());
     const output = await runContainerAgent(group, {
       prompt: task.prompt,
       sessionId,
       groupFolder: task.group_folder,
       chatJid: task.chat_jid,
       isMain,
-      isScheduledTask: true
+      isScheduledTask: true,
+      model: modelSelection.model,
+      reasoningEffort: modelSelection.reasoningEffort
     });
 
     if (output.status === 'error') {

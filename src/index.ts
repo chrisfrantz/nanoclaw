@@ -19,6 +19,15 @@ import { initDatabase, storeMessage, storeChatMetadata, getNewMessages, getMessa
 import { startSchedulerLoop } from './task-scheduler.js';
 import { runContainerAgent, writeTasksSnapshot, writeGroupsSnapshot, AvailableGroup } from './container-runner.js';
 import { loadJson, saveJson } from './utils.js';
+import {
+  loadModelPrefs,
+  saveModelPrefs,
+  stripTrigger,
+  resolveModelSelection,
+  getDefaultModels,
+  ModelPreference,
+  ModelMode
+} from './model-routing.js';
 
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
@@ -30,6 +39,7 @@ let lastTimestamp = '';
 let sessions: Session = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
+let modelPrefs: Record<string, ModelPreference> = {};
 
 function getTelegramChatId(chatJid: string): string | null {
   if (!chatJid.startsWith('telegram:')) return null;
@@ -54,6 +64,7 @@ function loadState(): void {
   lastAgentTimestamp = state.last_agent_timestamp || {};
   sessions = loadJson(path.join(DATA_DIR, 'sessions.json'), {});
   registeredGroups = loadJson(path.join(DATA_DIR, 'registered_groups.json'), {});
+  modelPrefs = loadModelPrefs();
   logger.info({ groupCount: Object.keys(registeredGroups).length }, 'State loaded');
 }
 
@@ -101,6 +112,10 @@ async function processMessage(msg: NewMessage): Promise<void> {
   // Main group responds to all messages; other groups require trigger prefix
   if (!isMainGroup && !TRIGGER_PATTERN.test(content)) return;
 
+  const strippedContent = stripTrigger(content);
+  const modelCommandHandled = await handleModelCommand(msg.chat_jid, strippedContent, msg.timestamp);
+  if (modelCommandHandled) return;
+
   // Get all messages since last agent interaction so the session has full context
   const sinceTimestamp = lastAgentTimestamp[msg.chat_jid] || '';
   const missedMessages = getMessagesSince(msg.chat_jid, sinceTimestamp);
@@ -121,7 +136,8 @@ async function processMessage(msg: NewMessage): Promise<void> {
   logger.info({ group: group.name, messageCount: missedMessages.length }, 'Processing message');
 
   await setTyping(msg.chat_jid, true);
-  const response = await runAgent(group, prompt, msg.chat_jid);
+  const modelSelection = resolveModelSelection(strippedContent, msg.chat_jid, modelPrefs);
+  const response = await runAgent(group, prompt, msg.chat_jid, modelSelection);
   await setTyping(msg.chat_jid, false);
 
   if (response) {
@@ -130,7 +146,12 @@ async function processMessage(msg: NewMessage): Promise<void> {
   }
 }
 
-async function runAgent(group: RegisteredGroup, prompt: string, chatJid: string): Promise<string | null> {
+async function runAgent(
+  group: RegisteredGroup,
+  prompt: string,
+  chatJid: string,
+  modelSelection: { model: string; reasoningEffort?: 'low' | 'medium' | 'high' }
+): Promise<string | null> {
   const isMain = group.folder === MAIN_GROUP_FOLDER;
   const sessionId = sessions[group.folder];
 
@@ -156,7 +177,9 @@ async function runAgent(group: RegisteredGroup, prompt: string, chatJid: string)
       sessionId,
       groupFolder: group.folder,
       chatJid,
-      isMain
+      isMain,
+      model: modelSelection.model,
+      reasoningEffort: modelSelection.reasoningEffort
     });
 
     if (output.newSessionId) {
@@ -188,6 +211,99 @@ async function sendMessage(chatJid: string, text: string): Promise<void> {
   } catch (err) {
     logger.error({ chatJid, err }, 'Failed to send message');
   }
+}
+
+function formatModelPref(pref: ModelPreference | undefined): string {
+  if (!pref || pref.mode === 'auto') return 'auto (content-based)';
+  if (pref.mode === 'custom') {
+    const effort = pref.reasoningEffort ? `, reasoning ${pref.reasoningEffort}` : '';
+    return `custom: ${pref.model}${effort}`;
+  }
+  return pref.mode;
+}
+
+function setModelPreference(chatJid: string, pref: ModelPreference): void {
+  modelPrefs[chatJid] = pref;
+  saveModelPrefs(modelPrefs);
+}
+
+function getModelHelp(): string {
+  const defaults = getDefaultModels();
+  return [
+    'Model control:',
+    '- `model auto` (default: detect code/chat/write)',
+    `- \`model code\` → ${defaults.code.model} (reasoning ${defaults.code.reasoningEffort})`,
+    `- \`model chat\` → ${defaults.chat.model}`,
+    `- \`model write\` → ${defaults.write.model} (reasoning ${defaults.write.reasoningEffort})`,
+    '- `model gpt-5.2` or `model gpt-5.2-codex high` (custom)',
+    '- `model status` (show current)'
+  ].join('\n');
+}
+
+async function handleModelCommand(chatJid: string, content: string, timestamp: string): Promise<boolean> {
+  const lowered = content.toLowerCase();
+  const isCommand =
+    lowered.startsWith('model') ||
+    lowered.startsWith('use model') ||
+    lowered.startsWith('set model') ||
+    lowered.startsWith('switch model') ||
+    lowered.startsWith('model:') ||
+    lowered.startsWith('use gpt-');
+
+  if (!isCommand) return false;
+
+  const tokens = content
+    .replace(/^model\s*:?/i, '')
+    .replace(/^(use|set|switch)\s+model\s*/i, '')
+    .replace(/^use\s+/i, '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (tokens.length === 0 || tokens[0].toLowerCase() === 'status' || tokens[0].toLowerCase() === 'help') {
+    const current = formatModelPref(modelPrefs[chatJid]);
+    await sendMessage(chatJid, `${getModelHelp()}\n\nCurrent: ${current}`);
+    lastAgentTimestamp[chatJid] = timestamp;
+    saveState();
+    return true;
+  }
+
+  const first = tokens[0].toLowerCase();
+  const modeMap: Record<string, ModelMode> = {
+    auto: 'auto',
+    default: 'auto',
+    code: 'code',
+    coding: 'code',
+    chat: 'chat',
+    conversation: 'chat',
+    write: 'write',
+    writing: 'write'
+  };
+
+  if (modeMap[first]) {
+    const mode = modeMap[first];
+    setModelPreference(chatJid, { mode });
+    await sendMessage(chatJid, `Model mode set to ${mode}.`);
+    lastAgentTimestamp[chatJid] = timestamp;
+    saveState();
+    return true;
+  }
+
+  const model = tokens[0];
+  let reasoningEffort: ModelPreference['reasoningEffort'];
+  for (const token of tokens.slice(1)) {
+    const normalized = token.toLowerCase().replace('reasoning=', '');
+    if (normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+      reasoningEffort = normalized;
+    }
+  }
+
+  setModelPreference(chatJid, { mode: 'custom', model, reasoningEffort });
+  const effortText = reasoningEffort ? ` with reasoning ${reasoningEffort}` : '';
+  await sendMessage(chatJid, `Model set to ${model}${effortText}.`);
+  lastAgentTimestamp[chatJid] = timestamp;
+  saveState();
+  return true;
 }
 
 function startIpcWatcher(): void {
