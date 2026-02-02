@@ -114,10 +114,11 @@ function buildPrompt(input: ContainerInput): string {
     : 'You are responding to a user message.';
 
   return [
-    'You are NanoClaw, a WhatsApp assistant running inside a Linux container.',
+    'You are NanoClaw, a Telegram assistant running inside a Linux container.',
     scheduledNote,
     '',
-    'Output MUST be a single JSON object that matches the provided schema:',
+    'Output MUST be a single JSON object that matches the provided schema.',
+    'Every action object MUST include all action fields; use null for fields that do not apply.',
     '- reply: the message to send back to the triggering chat (no assistant name prefix).',
     '- actions: array of side-effects to request from the host (can be empty).',
     'Do not include any extra text outside JSON.',
@@ -137,9 +138,9 @@ function buildPrompt(input: ContainerInput): string {
     '',
     'Actions:',
     '- send_message: send a message to the current chat.',
-    '- schedule_task: create a scheduled task (cron/interval/once). Use local time for "once" (no Z suffix).',
+    '- schedule_task: create a scheduled task (cron/interval/once). Use local time for "once" (no Z suffix). Include context_mode ("group" or "isolated") and target_group (null unless main is scheduling for another group).',
     '- pause_task / resume_task / cancel_task: manage tasks by id.',
-    '- register_group (main only): register a new WhatsApp group using a JID from available_groups.json.',
+    '- register_group (main only): register a new Telegram chat using a JID from available_groups.json.',
     '- refresh_groups (main only): refresh available_groups.json snapshot.',
     '',
     'Constraints:',

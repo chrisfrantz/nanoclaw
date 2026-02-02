@@ -25,19 +25,32 @@
               "refresh_groups"
             ]
           },
-          "text": { "type": "string" },
-          "prompt": { "type": "string" },
-          "schedule_type": { "type": "string", "enum": ["cron", "interval", "once"] },
-          "schedule_value": { "type": "string" },
-          "context_mode": { "type": "string", "enum": ["group", "isolated"] },
-          "target_group": { "type": "string" },
-          "task_id": { "type": "string" },
-          "jid": { "type": "string" },
-          "name": { "type": "string" },
-          "folder": { "type": "string" },
-          "trigger": { "type": "string" }
+          "text": { "type": ["string", "null"] },
+          "prompt": { "type": ["string", "null"] },
+          "schedule_type": { "type": ["string", "null"], "enum": ["cron", "interval", "once", null] },
+          "schedule_value": { "type": ["string", "null"] },
+          "context_mode": { "type": ["string", "null"], "enum": ["group", "isolated", null] },
+          "target_group": { "type": ["string", "null"] },
+          "task_id": { "type": ["string", "null"] },
+          "jid": { "type": ["string", "null"] },
+          "name": { "type": ["string", "null"] },
+          "folder": { "type": ["string", "null"] },
+          "trigger": { "type": ["string", "null"] }
         },
-        "required": ["type"]
+        "required": [
+          "type",
+          "text",
+          "prompt",
+          "schedule_type",
+          "schedule_value",
+          "context_mode",
+          "target_group",
+          "task_id",
+          "jid",
+          "name",
+          "folder",
+          "trigger"
+        ]
       }
     }
   },

@@ -522,8 +522,12 @@ async function startTelegramBot(): Promise<void> {
     });
   });
 
-  await telegramBot.launch();
-  logger.info('Telegram bot started');
+  telegramBot.launch()
+    .then(() => logger.info('Telegram bot started'))
+    .catch((error) => {
+      logger.error({ error }, 'Failed to start Telegram bot');
+      process.exit(1);
+    });
 
   process.once('SIGINT', () => {
     logger.info('Shutting down Telegram bot');
