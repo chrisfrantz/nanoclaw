@@ -44,6 +44,7 @@ export interface ContainerInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  sessionScope?: 'main' | 'review';
   model?: string;
   reasoningEffort?: 'low' | 'medium' | 'high';
 }
@@ -61,7 +62,11 @@ interface VolumeMount {
   readonly?: boolean;
 }
 
-function buildVolumeMounts(group: RegisteredGroup, isMain: boolean): VolumeMount[] {
+function buildVolumeMounts(
+  group: RegisteredGroup,
+  isMain: boolean,
+  sessionScope: ContainerInput['sessionScope']
+): VolumeMount[] {
   const mounts: VolumeMount[] = [];
   const homeDir = getHomeDir();
   const projectRoot = process.cwd();
@@ -114,7 +119,8 @@ function buildVolumeMounts(group: RegisteredGroup, isMain: boolean): VolumeMount
 
   // Per-group Codex sessions directory (isolated from other groups)
   // Each group gets their own .codex/ to prevent cross-group session access
-  const groupSessionsDir = path.join(DATA_DIR, 'sessions', group.folder, '.codex');
+  const sessionSuffix = group.folder + (sessionScope === 'review' ? '-review' : '');
+  const groupSessionsDir = path.join(DATA_DIR, 'sessions', sessionSuffix, '.codex');
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   mounts.push({
     hostPath: groupSessionsDir,
@@ -198,7 +204,7 @@ export async function runContainerAgent(
   const groupDir = path.join(GROUPS_DIR, group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const mounts = buildVolumeMounts(group, input.isMain, input.sessionScope);
   const containerArgs = buildContainerArgs(mounts);
 
   logger.debug({

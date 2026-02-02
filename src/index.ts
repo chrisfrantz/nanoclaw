@@ -70,6 +70,45 @@ function trackOutgoing(chatJid: string, text: string): void {
   recentOutgoing[chatJid] = { text, timestamp: Date.now() };
 }
 
+function shouldAutoReview(content: string): boolean {
+  const lowered = content.toLowerCase();
+  const keywords = [
+    'write code',
+    'edit code',
+    'refactor',
+    'fix ',
+    'implement',
+    'add feature',
+    'evaluate code',
+    'review code',
+    'code review',
+    'debug',
+    'optimize',
+    'performance',
+    'security',
+    'tests',
+    'lint',
+    'typecheck'
+  ];
+  return keywords.some(k => lowered.includes(k));
+}
+
+function buildReviewPrompt(userContent: string, assistantDraft: string): string {
+  return [
+    'You are reviewing a draft response from the main agent.',
+    'Focus on correctness, missing edge cases, unsafe changes, and test gaps.',
+    'Be concise and actionable.',
+    '',
+    'User request:',
+    userContent.trim(),
+    '',
+    'Assistant draft:',
+    assistantDraft.trim(),
+    '',
+    'Return a short review with bullets. If no issues, say "no issues found".'
+  ].join('\n');
+}
+
 function loadState(): void {
   const statePath = path.join(DATA_DIR, 'router_state.json');
   const state = loadJson<{ last_timestamp?: string; last_agent_timestamp?: Record<string, string> }>(statePath, {});
@@ -159,6 +198,26 @@ async function processMessage(msg: NewMessage): Promise<void> {
     } else {
       lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
     }
+
+    const shouldReview = isMainGroup && shouldAutoReview(strippedContent);
+    if (shouldReview) {
+      const reviewPrompt = buildReviewPrompt(strippedContent, response);
+      const reviewModel = { model: 'gpt-5.2-codex', reasoningEffort: 'high' as const };
+      const reviewResponse = await runAgent(
+        group,
+        reviewPrompt,
+        msg.chat_jid,
+        reviewModel,
+        { sessionScope: 'review', trackSession: false }
+      );
+      if (reviewResponse) {
+        const reviewText = reviewResponse.trim();
+        const message = reviewText.toLowerCase().startsWith('review')
+          ? reviewText
+          : `review\n${reviewText}`;
+        await sendMessage(msg.chat_jid, message);
+      }
+    }
   }
 }
 
@@ -166,10 +225,12 @@ async function runAgent(
   group: RegisteredGroup,
   prompt: string,
   chatJid: string,
-  modelSelection: { model: string; reasoningEffort?: 'low' | 'medium' | 'high' }
+  modelSelection: { model: string; reasoningEffort?: 'low' | 'medium' | 'high' },
+  options?: { sessionScope?: 'main' | 'review'; trackSession?: boolean }
 ): Promise<string | null> {
   const isMain = group.folder === MAIN_GROUP_FOLDER;
-  const sessionId = sessions[group.folder];
+  const trackSession = options?.trackSession ?? true;
+  const sessionId = trackSession ? sessions[group.folder] : undefined;
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -194,11 +255,12 @@ async function runAgent(
       groupFolder: group.folder,
       chatJid,
       isMain,
+      sessionScope: options?.sessionScope,
       model: modelSelection.model,
       reasoningEffort: modelSelection.reasoningEffort
     });
 
-    if (output.newSessionId) {
+    if (trackSession && output.newSessionId) {
       sessions[group.folder] = output.newSessionId;
       saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
     }
