@@ -1,10 +1,10 @@
 # NanoClaw
 
-Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
+Personal OpenAI Codex assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
 
 ## Quick Context
 
-Single Node.js process that connects to WhatsApp, routes messages to Claude Agent SDK running in Apple Container (Linux VMs). Each group has isolated filesystem and memory.
+Single Node.js process that connects to WhatsApp, routes messages to the Codex CLI running in Apple Container (Linux VMs). Each group has isolated filesystem and memory.
 
 ## Key Files
 
@@ -15,9 +15,9 @@ Single Node.js process that connects to WhatsApp, routes messages to Claude Agen
 | `src/container-runner.ts` | Spawns agent containers with mounts |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
-| `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
+| `groups/{name}/MEMORY.md` | Per-group memory (isolated) |
 
-## Skills
+## Skills (Codex Playbooks)
 
 | Skill | When to Use |
 |-------|-------------|

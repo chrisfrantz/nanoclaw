@@ -1,6 +1,6 @@
 # NanoClaw Specification
 
-A personal Claude assistant accessible via WhatsApp, with persistent memory per conversation, scheduled tasks, and email integration.
+A personal Codex assistant accessible via WhatsApp, with persistent memory per conversation, scheduled tasks, and email integration.
 
 ---
 
@@ -14,7 +14,7 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 6. [Message Flow](#message-flow)
 7. [Commands](#commands)
 8. [Scheduled Tasks](#scheduled-tasks)
-9. [MCP Servers](#mcp-servers)
+9. [IPC Actions](#ipc-actions)
 10. [Deployment](#deployment)
 11. [Security Considerations](#security-considerations)
 
@@ -54,15 +54,15 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 │  │  Volume mounts:                                                │   │
 │  │    • groups/{name}/ → /workspace/group                         │   │
 │  │    • groups/global/ → /workspace/global/ (non-main only)        │   │
-│  │    • data/sessions/{group}/.claude/ → /home/node/.claude/      │   │
+│  │    • data/sessions/{group}/.codex/ → /home/node/.codex/        │   │
 │  │    • Additional dirs → /workspace/extra/*                      │   │
 │  │                                                                │   │
-│  │  Tools (all groups):                                           │   │
+│  │  Capabilities (all groups):                                    │   │
 │  │    • Bash (safe - sandboxed in container!)                     │   │
 │  │    • Read, Write, Edit, Glob, Grep (file operations)           │   │
-│  │    • WebSearch, WebFetch (internet access)                     │   │
+│  │    • Network access via shell tools (curl/wget)                │   │
 │  │    • agent-browser (browser automation)                        │   │
-│  │    • mcp__nanoclaw__* (scheduler tools via IPC)                │   │
+│  │    • IPC actions (schedule tasks, send messages)               │   │
 │  │                                                                │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                                                                      │
@@ -76,7 +76,7 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 | WhatsApp Connection | Node.js (@whiskeysockets/baileys) | Connect to WhatsApp, send/receive messages |
 | Message Storage | SQLite (better-sqlite3) | Store messages for polling |
 | Container Runtime | Apple Container | Isolated Linux VMs for agent execution |
-| Agent | @anthropic-ai/claude-agent-sdk (0.2.29) | Run Claude with tools and MCP servers |
+| Agent | Codex CLI | Run Codex with file/system access and IPC actions |
 | Browser Automation | agent-browser + Chromium | Web interaction and screenshots |
 | Runtime | Node.js 20+ | Host process for routing and scheduling |
 
@@ -86,7 +86,7 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 
 ```
 nanoclaw/
-├── CLAUDE.md                      # Project context for Claude Code
+├── AGENTS.md                      # Project context for Codex CLI
 ├── docs/
 │   ├── SPEC.md                    # This specification document
 │   ├── REQUIREMENTS.md            # Architecture decisions
@@ -94,7 +94,14 @@ nanoclaw/
 ├── README.md                      # User documentation
 ├── package.json                   # Node.js dependencies
 ├── tsconfig.json                  # TypeScript configuration
-├── .mcp.json                      # MCP server configuration (reference)
+├── .codex/                        # Codex playbooks (skills)
+│   └── skills/
+│       ├── setup/
+│       │   └── SKILL.md           # /setup skill
+│       ├── customize/
+│       │   └── SKILL.md           # /customize skill
+│       └── debug/
+│           └── SKILL.md           # /debug skill (container debugging)
 ├── .gitignore
 │
 ├── src/
@@ -108,35 +115,25 @@ nanoclaw/
 │   └── container-runner.ts        # Spawns agents in Apple Containers
 │
 ├── container/
-│   ├── Dockerfile                 # Container image (runs as 'node' user, includes Claude Code CLI)
+│   ├── Dockerfile                 # Container image (runs as 'node' user, includes Codex CLI)
 │   ├── build.sh                   # Build script for container image
 │   ├── agent-runner/              # Code that runs inside the container
 │   │   ├── package.json
 │   │   ├── tsconfig.json
 │   │   └── src/
-│   │       ├── index.ts           # Entry point (reads JSON, runs agent)
-│   │       └── ipc-mcp.ts         # MCP server for host communication
+│   │       └── index.ts           # Entry point (reads JSON, runs agent)
 │   └── skills/
 │       └── agent-browser.md       # Browser automation skill
 │
 ├── dist/                          # Compiled JavaScript (gitignored)
 │
-├── .claude/
-│   └── skills/
-│       ├── setup/
-│       │   └── SKILL.md           # /setup skill
-│       ├── customize/
-│       │   └── SKILL.md           # /customize skill
-│       └── debug/
-│           └── SKILL.md           # /debug skill (container debugging)
-│
 ├── groups/
-│   ├── CLAUDE.md                  # Global memory (all groups read this)
+│   ├── MEMORY.md                  # Global memory (all groups read this)
 │   ├── main/                      # Self-chat (main control channel)
-│   │   ├── CLAUDE.md              # Main channel memory
+│   │   ├── MEMORY.md              # Main channel memory
 │   │   └── logs/                  # Task execution logs
 │   └── {Group Name}/              # Per-group folders (created on registration)
-│       ├── CLAUDE.md              # Group-specific memory
+│       ├── MEMORY.md              # Group-specific memory
 │       ├── logs/                  # Task logs for this group
 │       └── *.md                   # Files created by the agent
 │
@@ -145,7 +142,7 @@ nanoclaw/
 │   └── messages.db                # SQLite database (messages, scheduled_tasks, task_run_logs)
 │
 ├── data/                          # Application state (gitignored)
-│   ├── sessions.json              # Active session IDs per group
+│   ├── sessions.json              # Session markers per group
 │   ├── registered_groups.json     # Group JID → folder mapping
 │   ├── router_state.json          # Last processed timestamp + last agent timestamps
 │   ├── env/env                    # Copy of .env for container mounting
@@ -218,22 +215,15 @@ Additional mounts appear at `/workspace/extra/{containerPath}` inside the contai
 
 **Apple Container mount syntax note:** Read-write mounts use `-v host:container`, but readonly mounts require `--mount "type=bind,source=...,target=...,readonly"` (the `:ro` suffix doesn't work).
 
-### Claude Authentication
+### Codex Authentication
 
-Configure authentication in a `.env` file in the project root. Two options:
+Configure authentication in a `.env` file in the project root:
 
-**Option 1: Claude Subscription (OAuth token)**
 ```bash
-CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
-```
-The token can be extracted from `~/.claude/.credentials.json` if you're logged in to Claude Code.
-
-**Option 2: Pay-per-use API Key**
-```bash
-ANTHROPIC_API_KEY=sk-ant-api03-...
+CODEX_API_KEY=sk-...
 ```
 
-Only the authentication variables (`CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY`) are extracted from `.env` and mounted into the container at `/workspace/env-dir/env`, then sourced by the entrypoint script. This ensures other environment variables in `.env` are not exposed to the agent. This workaround is needed because Apple Container loses `-e` environment variables when using `-i` (interactive mode with piped stdin).
+Only the authentication variable (`CODEX_API_KEY`) is extracted from `.env` and mounted into the container at `/workspace/env-dir/env`, then sourced by the entrypoint script. This ensures other environment variables in `.env` are not exposed to the agent. This workaround is needed because Apple Container loses `-e` environment variables when using `-i` (interactive mode with piped stdin).
 
 ### Changing the Assistant Name
 
@@ -258,27 +248,27 @@ Files with `{{PLACEHOLDER}}` values need to be configured:
 
 ## Memory System
 
-NanoClaw uses a hierarchical memory system based on CLAUDE.md files.
+NanoClaw uses a hierarchical memory system based on MEMORY.md files.
 
 ### Memory Hierarchy
 
 | Level | Location | Read By | Written By | Purpose |
 |-------|----------|---------|------------|---------|
-| **Global** | `groups/CLAUDE.md` | All groups | Main only | Preferences, facts, context shared across all conversations |
-| **Group** | `groups/{name}/CLAUDE.md` | That group | That group | Group-specific context, conversation memory |
+| **Global** | `groups/MEMORY.md` | All groups | Main only | Preferences, facts, context shared across all conversations |
+| **Group** | `groups/{name}/MEMORY.md` | That group | That group | Group-specific context, conversation memory |
 | **Files** | `groups/{name}/*.md` | That group | That group | Notes, research, documents created during conversation |
 
 ### How Memory Works
 
 1. **Agent Context Loading**
    - Agent runs with `cwd` set to `groups/{group-name}/`
-   - Claude Agent SDK with `settingSources: ['project']` automatically loads:
-     - `../CLAUDE.md` (parent directory = global memory)
-     - `./CLAUDE.md` (current directory = group memory)
+   - Agent runner injects memory into the Codex prompt:
+     - `../MEMORY.md` (parent directory = global memory)
+     - `./MEMORY.md` (current directory = group memory)
 
 2. **Writing Memory**
-   - When user says "remember this", agent writes to `./CLAUDE.md`
-   - When user says "remember this globally" (main channel only), agent writes to `../CLAUDE.md`
+   - When user says "remember this", agent writes to `./MEMORY.md`
+   - When user says "remember this globally" (main channel only), agent writes to `../MEMORY.md`
    - Agent can create files like `notes.md`, `research.md` in the group folder
 
 3. **Main Channel Privileges**
@@ -291,19 +281,19 @@ NanoClaw uses a hierarchical memory system based on CLAUDE.md files.
 
 ## Session Management
 
-Sessions enable conversation continuity - Claude remembers what you talked about.
+Sessions enable conversation continuity - Codex resumes prior context.
 
 ### How Sessions Work
 
-1. Each group has a session ID stored in `data/sessions.json`
-2. Session ID is passed to Claude Agent SDK's `resume` option
-3. Claude continues the conversation with full context
+1. Each group has a session marker stored in `data/sessions.json`
+2. Agent runner uses `codex exec resume --last` when a marker exists
+3. Codex resumes the most recent session for that group
 
 **data/sessions.json:**
 ```json
 {
-  "main": "session-abc123",
-  "Family Chat": "session-def456"
+  "main": "codex-last",
+  "Family Chat": "codex-last"
 }
 ```
 
@@ -337,16 +327,16 @@ Sessions enable conversation continuity - Claude remembers what you talked about
    └── Build prompt with full conversation context
    │
    ▼
-7. Router invokes Claude Agent SDK:
+7. Router invokes Codex CLI:
    ├── cwd: groups/{group-name}/
    ├── prompt: conversation history + current message
-   ├── resume: session_id (for continuity)
-   └── mcpServers: nanoclaw (scheduler)
+   ├── resume: last session if available
+   └── output: JSON (reply + actions)
    │
    ▼
-8. Claude processes message:
-   ├── Reads CLAUDE.md files for context
-   └── Uses tools as needed (search, email, etc.)
+8. Codex processes message:
+   ├── Reads MEMORY.md content from prompt
+   └── Uses shell/tools as needed (files, browser automation)
    │
    ▼
 9. Router prefixes response with assistant name and sends via WhatsApp
@@ -358,7 +348,7 @@ Sessions enable conversation continuity - Claude remembers what you talked about
 ### Trigger Word Matching
 
 Messages must start with the trigger pattern (default: `@Andy`):
-- `@Andy what's the weather?` → ✅ Triggers Claude
+- `@Andy what's the weather?` → ✅ Triggers Codex
 - `@andy help me` → ✅ Triggers (case insensitive)
 - `Hey @Andy` → ❌ Ignored (trigger not at start)
 - `What's up?` → ❌ Ignored (no trigger)
@@ -383,7 +373,7 @@ This allows the agent to understand the conversation context even if it wasn't m
 
 | Command | Example | Effect |
 |---------|---------|--------|
-| `@Assistant [message]` | `@Andy what's the weather?` | Talk to Claude |
+| `@Assistant [message]` | `@Andy what's the weather?` | Talk to Codex |
 
 ### Commands Available in Main Channel Only
 
@@ -403,7 +393,7 @@ NanoClaw has a built-in scheduler that runs tasks as full agents in their group'
 ### How Scheduling Works
 
 1. **Group Context**: Tasks created in a group run with that group's working directory and memory
-2. **Full Agent Capabilities**: Scheduled tasks have access to all tools (WebSearch, file operations, etc.)
+2. **Full Agent Capabilities**: Scheduled tasks have access to all tools (shell commands, file operations, agent-browser, etc.)
 3. **Optional Messaging**: Tasks can send messages to their group using the `send_message` tool, or complete silently
 4. **Main Channel Privileges**: The main channel can schedule tasks for any group and view all tasks
 
@@ -413,21 +403,26 @@ NanoClaw has a built-in scheduler that runs tasks as full agents in their group'
 |------|--------------|---------|
 | `cron` | Cron expression | `0 9 * * 1` (Mondays at 9am) |
 | `interval` | Milliseconds | `3600000` (every hour) |
-| `once` | ISO timestamp | `2024-12-25T09:00:00Z` |
+| `once` | Local ISO timestamp (no Z) | `2024-12-25T09:00:00` |
 
 ### Creating a Task
 
 ```
 User: @Andy remind me every Monday at 9am to review the weekly metrics
 
-Claude: [calls mcp__nanoclaw__schedule_task]
-        {
-          "prompt": "Send a reminder to review weekly metrics. Be encouraging!",
-          "schedule_type": "cron",
-          "schedule_value": "0 9 * * 1"
-        }
-
-Claude: Done! I'll remind you every Monday at 9am.
+Codex:
+{
+  "reply": "Done! I'll remind you every Monday at 9am.",
+  "actions": [
+    {
+      "type": "schedule_task",
+      "prompt": "Send a reminder to review weekly metrics. Be encouraging!",
+      "schedule_type": "cron",
+      "schedule_value": "0 9 * * 1",
+      "context_mode": "group"
+    }
+  ]
+}
 ```
 
 ### One-Time Tasks
@@ -435,12 +430,19 @@ Claude: Done! I'll remind you every Monday at 9am.
 ```
 User: @Andy at 5pm today, send me a summary of today's emails
 
-Claude: [calls mcp__nanoclaw__schedule_task]
-        {
-          "prompt": "Search for today's emails, summarize the important ones, and send the summary to the group.",
-          "schedule_type": "once",
-          "schedule_value": "2024-01-31T17:00:00Z"
-        }
+Codex:
+{
+  "reply": "Got it. I'll send you a summary at 5pm.",
+  "actions": [
+    {
+      "type": "schedule_task",
+      "prompt": "Search for today's emails, summarize the important ones, and send the summary to the group.",
+      "schedule_type": "once",
+      "schedule_value": "2024-01-31T17:00:00",
+      "context_mode": "isolated"
+    }
+  ]
+}
 ```
 
 ### Managing Tasks
@@ -457,23 +459,20 @@ From main channel:
 
 ---
 
-## MCP Servers
+## IPC Actions
 
-### NanoClaw MCP (built-in)
+Codex returns a structured JSON response with an `actions` array. The host watches the IPC directory and applies the actions.
 
-The `nanoclaw` MCP server is created dynamically per agent call with the current group's context.
-
-**Available Tools:**
-| Tool | Purpose |
-|------|---------|
+**Available Actions:**
+| Action | Purpose |
+|--------|---------|
 | `schedule_task` | Schedule a recurring or one-time task |
-| `list_tasks` | Show tasks (group's tasks, or all if main) |
-| `get_task` | Get task details and run history |
-| `update_task` | Modify task prompt or schedule |
 | `pause_task` | Pause a task |
 | `resume_task` | Resume a paused task |
 | `cancel_task` | Delete a task |
 | `send_message` | Send a WhatsApp message to the group |
+| `register_group` | Register a new WhatsApp group (main only) |
+| `refresh_groups` | Refresh available groups list (main only) |
 
 ---
 
@@ -564,7 +563,7 @@ All agents run inside Apple Container (lightweight Linux VMs), providing:
 
 ### Prompt Injection Risk
 
-WhatsApp messages could contain malicious instructions attempting to manipulate Claude's behavior.
+WhatsApp messages could contain malicious instructions attempting to manipulate Codex's behavior.
 
 **Mitigations:**
 - Container isolation limits blast radius
@@ -572,7 +571,7 @@ WhatsApp messages could contain malicious instructions attempting to manipulate 
 - Trigger word required (reduces accidental processing)
 - Agents can only access their group's mounted directories
 - Main can configure additional directories per group
-- Claude's built-in safety training
+- Model safety training
 
 **Recommendations:**
 - Only register trusted groups
@@ -584,7 +583,7 @@ WhatsApp messages could contain malicious instructions attempting to manipulate 
 
 | Credential | Storage Location | Notes |
 |------------|------------------|-------|
-| Claude CLI Auth | data/sessions/{group}/.claude/ | Per-group isolation, mounted to /home/node/.claude/ |
+| Codex CLI Auth | data/sessions/{group}/.codex/ | Per-group isolation, mounted to /home/node/.codex/ |
 | WhatsApp Session | store/auth/ | Auto-created, persists ~20 days |
 
 ### File Permissions
@@ -603,10 +602,10 @@ chmod 700 groups/
 | Issue | Cause | Solution |
 |-------|-------|----------|
 | No response to messages | Service not running | Check `launchctl list | grep nanoclaw` |
-| "Claude Code process exited with code 1" | Apple Container failed to start | Check logs; NanoClaw auto-starts container system but may fail |
-| "Claude Code process exited with code 1" | Session mount path wrong | Ensure mount is to `/home/node/.claude/` not `/root/.claude/` |
+| "Codex CLI process exited with code 1" | Apple Container failed to start | Check logs; NanoClaw auto-starts container system but may fail |
+| "Codex CLI process exited with code 1" | Session mount path wrong | Ensure mount is to `/home/node/.codex/` not `/root/.codex/` |
 | Session not continuing | Session ID not saved | Check `data/sessions.json` |
-| Session not continuing | Mount path mismatch | Container user is `node` with HOME=/home/node; sessions must be at `/home/node/.claude/` |
+| Session not continuing | Mount path mismatch | Container user is `node` with HOME=/home/node; sessions must be at `/home/node/.codex/` |
 | "QR code expired" | WhatsApp session expired | Delete store/auth/ and restart |
 | "No groups registered" | Haven't added groups | Use `@Andy add group "Name"` in main |
 

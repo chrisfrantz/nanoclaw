@@ -5,6 +5,8 @@ description: Add Gmail integration to NanoClaw. Can be configured as a tool (age
 
 # Add Gmail Integration
 
+> **Note:** This skill is MCP-based and was written for the previous SDK-based runtime. The Codex version of NanoClaw uses IPC actions. Port by defining IPC actions + host-side Gmail API calls; treat `mcp__*` references below as legacy.
+
 This skill adds Gmail capabilities to NanoClaw. It can be configured in two modes:
 
 1. **Tool Mode** - Agent can read/send emails, but only when triggered from WhatsApp
@@ -195,7 +197,7 @@ allowedTools: [
 
 Read `src/container-runner.ts` and find the `buildVolumeMounts` function.
 
-Add this mount block (after the `.claude` mount is a good location):
+Add this mount block (after the `.codex` mount is a good location):
 
 ```typescript
 // Gmail credentials directory
@@ -211,7 +213,7 @@ if (fs.existsSync(gmailDir)) {
 
 ### Step 3: Update Group Memory
 
-Append to `groups/CLAUDE.md` (the global memory file):
+Append to `groups/MEMORY.md` (the global memory file):
 
 ```markdown
 
@@ -227,7 +229,7 @@ You have access to Gmail via MCP tools:
 Example: "Check my unread emails from today" or "Send an email to john@example.com about the meeting"
 ```
 
-Also append the same section to `groups/main/CLAUDE.md`.
+Also append the same section to `groups/main/MEMORY.md`.
 
 ### Step 4: Rebuild and Restart
 
@@ -429,7 +431,7 @@ export async function checkForNewEmails(): Promise<EmailMessage[]> {
 
   // This requires calling Gmail MCP's search_emails tool
   // Implementation depends on how you want to invoke MCP from Node
-  // Option 1: Use @anthropic-ai/claude-agent-sdk with just gmail MCP
+  // Option 1: Use legacy SDK with just gmail MCP
   // Option 2: Run npx gmail MCP as subprocess and parse output
   // Option 3: Import gmail-autoauth-mcp directly
 
@@ -610,7 +612,7 @@ Create the email group directory and memory file:
 mkdir -p groups/email
 ```
 
-Write `groups/email/CLAUDE.md`:
+Write `groups/email/MEMORY.md`:
 
 ```markdown
 # Email Channel
@@ -715,7 +717,7 @@ To remove Gmail entirely:
 
 4. Delete `src/email-channel.ts` (if created)
 
-5. Remove Gmail sections from `groups/*/CLAUDE.md`
+5. Remove Gmail sections from `groups/*/MEMORY.md`
 
 6. Rebuild:
    ```bash

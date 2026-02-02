@@ -1,12 +1,13 @@
 /**
- * NanoClaw Agent Runner
+ * NanoClaw Agent Runner (Codex)
  * Runs inside a container, receives config via stdin, outputs result to stdout
  */
 
+import { spawn } from 'child_process';
+import { CronExpressionParser } from 'cron-parser';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
-import { createIpcMcp } from './ipc-mcp.js';
 
 interface ContainerInput {
   prompt: string;
@@ -24,16 +25,34 @@ interface ContainerOutput {
   error?: string;
 }
 
-interface SessionEntry {
-  sessionId: string;
-  fullPath: string;
-  summary: string;
-  firstPrompt: string;
+type ScheduleType = 'cron' | 'interval' | 'once';
+type ContextMode = 'group' | 'isolated';
+
+type Action =
+  | { type: 'send_message'; text: string }
+  | { type: 'schedule_task'; prompt: string; schedule_type: ScheduleType; schedule_value: string; context_mode?: ContextMode; target_group?: string }
+  | { type: 'pause_task'; task_id: string }
+  | { type: 'resume_task'; task_id: string }
+  | { type: 'cancel_task'; task_id: string }
+  | { type: 'register_group'; jid: string; name: string; folder: string; trigger: string }
+  | { type: 'refresh_groups' };
+
+interface AgentResponse {
+  reply: string;
+  actions: Action[];
 }
 
-interface SessionsIndex {
-  entries: SessionEntry[];
-}
+const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
+const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+
+const GROUP_WORKDIR = '/workspace/group';
+const PROJECT_ROOT = '/workspace/project';
+const IPC_DIR = '/workspace/ipc';
+const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
+const TASKS_DIR = path.join(IPC_DIR, 'tasks');
+const RESPONSE_SCHEMA_PATH = '/app/response-schema.json';
+
+const MAX_MEMORY_CHARS = 12000;
 
 async function readStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -45,9 +64,6 @@ async function readStdin(): Promise<string> {
   });
 }
 
-const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
-const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
-
 function writeOutput(output: ContainerOutput): void {
   console.log(OUTPUT_START_MARKER);
   console.log(JSON.stringify(output));
@@ -58,146 +74,330 @@ function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
 }
 
-function getSessionSummary(sessionId: string, transcriptPath: string): string | null {
-  // sessions-index.json is in the same directory as the transcript
-  const projectDir = path.dirname(transcriptPath);
-  const indexPath = path.join(projectDir, 'sessions-index.json');
+function truncate(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return text.slice(0, maxChars) + '\n…(truncated)\n';
+}
 
-  if (!fs.existsSync(indexPath)) {
-    log(`Sessions index not found at ${indexPath}`);
+function readOptionalFile(filePath: string): string | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return fs.readFileSync(filePath, 'utf-8');
+  } catch (err) {
+    log(`Failed to read ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
     return null;
+  }
+}
+
+function buildPrompt(input: ContainerInput): string {
+  const groupMemoryPath = path.join(GROUP_WORKDIR, 'MEMORY.md');
+  const globalMemoryPath = input.isMain
+    ? path.join(PROJECT_ROOT, 'groups', 'global', 'MEMORY.md')
+    : '/workspace/global/MEMORY.md';
+
+  const memorySections: string[] = [];
+  const globalMemory = readOptionalFile(globalMemoryPath);
+  if (globalMemory) {
+    memorySections.push(`## Global Memory (${globalMemoryPath})\n${truncate(globalMemory, MAX_MEMORY_CHARS)}`);
+  }
+  const groupMemory = readOptionalFile(groupMemoryPath);
+  if (groupMemory) {
+    memorySections.push(`## Group Memory (${groupMemoryPath})\n${truncate(groupMemory, MAX_MEMORY_CHARS)}`);
+  }
+
+  const memoryBlock = memorySections.length > 0
+    ? `\nMEMORY (authoritative, can be edited):\n${memorySections.join('\n\n')}\n`
+    : '';
+
+  const scheduledNote = input.isScheduledTask
+    ? 'You are running as a scheduled task (not in direct response to a user). Use actions to message the user if needed.'
+    : 'You are responding to a user message.';
+
+  return [
+    'You are NanoClaw, a WhatsApp assistant running inside a Linux container.',
+    scheduledNote,
+    '',
+    'Output MUST be a single JSON object that matches the provided schema:',
+    '- reply: the message to send back to the triggering chat (no assistant name prefix).',
+    '- actions: array of side-effects to request from the host (can be empty).',
+    'Do not include any extra text outside JSON.',
+    '',
+    'Context:',
+    `- groupFolder: ${input.groupFolder}`,
+    `- chatJid: ${input.chatJid}`,
+    `- isMain: ${input.isMain}`,
+    `- workspace: ${GROUP_WORKDIR} (read/write)`,
+    `- projectRoot (main only): ${PROJECT_ROOT}`,
+    `- tasks snapshot: ${path.join(IPC_DIR, 'current_tasks.json')}`,
+    `- available groups snapshot (main only): ${path.join(IPC_DIR, 'available_groups.json')}`,
+    '',
+    'Memory rules:',
+    '- When the user says "remember this", update the group memory file.',
+    '- When the user says "remember this globally" (main only), update the global memory file.',
+    '',
+    'Actions:',
+    '- send_message: send a message to the current chat.',
+    '- schedule_task: create a scheduled task (cron/interval/once). Use local time for "once" (no Z suffix).',
+    '- pause_task / resume_task / cancel_task: manage tasks by id.',
+    '- register_group (main only): register a new WhatsApp group using a JID from available_groups.json.',
+    '- refresh_groups (main only): refresh available_groups.json snapshot.',
+    '',
+    'Constraints:',
+    '- Non-main groups cannot target other groups.',
+    '- Do not expose secrets in replies.',
+    memoryBlock,
+    '',
+    'CONVERSATION:',
+    input.prompt
+  ].join('\n');
+}
+
+function writeIpcFile(dir: string, data: object): string {
+  fs.mkdirSync(dir, { recursive: true });
+
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+  const filepath = path.join(dir, filename);
+
+  const tempPath = `${filepath}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2));
+  fs.renameSync(tempPath, filepath);
+
+  return filename;
+}
+
+function queueMessage(input: ContainerInput, text: string): void {
+  const data = {
+    type: 'message',
+    chatJid: input.chatJid,
+    text,
+    groupFolder: input.groupFolder,
+    timestamp: new Date().toISOString()
+  };
+  writeIpcFile(MESSAGES_DIR, data);
+}
+
+function validateSchedule(type: ScheduleType, value: string): string | null {
+  if (type === 'cron') {
+    try {
+      CronExpressionParser.parse(value);
+      return null;
+    } catch {
+      return `Invalid cron expression: "${value}"`;
+    }
+  }
+  if (type === 'interval') {
+    const ms = parseInt(value, 10);
+    if (isNaN(ms) || ms <= 0) {
+      return `Invalid interval: "${value}" (must be positive milliseconds)`;
+    }
+    return null;
+  }
+  if (type === 'once') {
+    const date = new Date(value);
+    if (isNaN(date.getTime())) {
+      return `Invalid timestamp: "${value}" (use local ISO like 2026-02-01T15:30:00)`;
+    }
+    return null;
+  }
+  return `Unknown schedule type: "${type}"`;
+}
+
+function processActions(actions: Action[], input: ContainerInput): string[] {
+  const warnings: string[] = [];
+
+  for (const action of actions) {
+    if (!action || typeof action !== 'object' || !('type' in action)) {
+      warnings.push('Ignored invalid action (missing type).');
+      continue;
+    }
+
+    switch (action.type) {
+      case 'send_message': {
+        if (!('text' in action) || typeof action.text !== 'string' || !action.text.trim()) {
+          warnings.push('send_message missing text.');
+          break;
+        }
+        queueMessage(input, action.text.trim());
+        break;
+      }
+      case 'schedule_task': {
+        const { prompt, schedule_type, schedule_value } = action;
+        if (!prompt || !schedule_type || !schedule_value) {
+          warnings.push('schedule_task missing required fields.');
+          break;
+        }
+        const validationError = validateSchedule(schedule_type, schedule_value);
+        if (validationError) {
+          warnings.push(validationError);
+          break;
+        }
+        const targetGroup = (input.isMain && action.target_group)
+          ? action.target_group
+          : input.groupFolder;
+
+        const data = {
+          type: 'schedule_task',
+          prompt,
+          schedule_type,
+          schedule_value,
+          context_mode: action.context_mode === 'isolated' ? 'isolated' : 'group',
+          groupFolder: targetGroup,
+          chatJid: input.chatJid,
+          createdBy: input.groupFolder,
+          timestamp: new Date().toISOString()
+        };
+
+        writeIpcFile(TASKS_DIR, data);
+        break;
+      }
+      case 'pause_task':
+      case 'resume_task':
+      case 'cancel_task': {
+        const taskId = (action as { task_id?: string }).task_id;
+        if (!taskId) {
+          warnings.push(`${action.type} missing task_id.`);
+          break;
+        }
+        const data = {
+          type: action.type,
+          taskId,
+          groupFolder: input.groupFolder,
+          isMain: input.isMain,
+          timestamp: new Date().toISOString()
+        };
+        writeIpcFile(TASKS_DIR, data);
+        break;
+      }
+      case 'register_group': {
+        if (!input.isMain) {
+          warnings.push('register_group is only allowed from the main group.');
+          break;
+        }
+        const { jid, name, folder, trigger } = action;
+        if (!jid || !name || !folder || !trigger) {
+          warnings.push('register_group missing required fields.');
+          break;
+        }
+        const data = {
+          type: 'register_group',
+          jid,
+          name,
+          folder,
+          trigger,
+          timestamp: new Date().toISOString()
+        };
+        writeIpcFile(TASKS_DIR, data);
+        break;
+      }
+      case 'refresh_groups': {
+        if (!input.isMain) {
+          warnings.push('refresh_groups is only allowed from the main group.');
+          break;
+        }
+        writeIpcFile(TASKS_DIR, {
+          type: 'refresh_groups',
+          timestamp: new Date().toISOString()
+        });
+        break;
+      }
+      default:
+        warnings.push(`Unknown action type: ${(action as { type?: string }).type}`);
+    }
+  }
+
+  return warnings;
+}
+
+function parseAgentResponse(raw: string): AgentResponse {
+  const parsed = JSON.parse(raw) as { reply?: unknown; actions?: unknown };
+  const reply = typeof parsed.reply === 'string' ? parsed.reply : '';
+  const actions = Array.isArray(parsed.actions) ? parsed.actions as Action[] : [];
+  return { reply, actions };
+}
+
+function runCodexCommand(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('codex', args, {
+      cwd: GROUP_WORKDIR,
+      env: process.env
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    const appendLimited = (current: string, chunk: string): string => {
+      const max = 20000;
+      if (current.length >= max) return current;
+      const next = current + chunk;
+      return next.length > max ? next.slice(0, max) : next;
+    };
+
+    child.stdout.on('data', chunk => {
+      stdout = appendLimited(stdout, chunk.toString());
+    });
+    child.stderr.on('data', chunk => {
+      stderr = appendLimited(stderr, chunk.toString());
+    });
+
+    child.on('error', err => reject(err));
+    child.on('close', code => resolve({ code: code ?? 1, stdout, stderr }));
+  });
+}
+
+async function runCodex(prompt: string, resume: boolean): Promise<AgentResponse> {
+  const outputPath = path.join('/tmp', `codex-output-${crypto.randomUUID()}.json`);
+  const args = [
+    'exec',
+    ...(resume ? ['resume', '--last'] : []),
+    '--color', 'never',
+    '--skip-git-repo-check',
+    '--output-schema', RESPONSE_SCHEMA_PATH,
+    '--output-last-message', outputPath,
+    '--dangerously-bypass-approvals-and-sandbox',
+    '--',
+    prompt
+  ];
+
+  const { code, stderr } = await runCodexCommand(args);
+
+  if (stderr) {
+    log(stderr.trim());
   }
 
   try {
-    const index: SessionsIndex = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
-    const entry = index.entries.find(e => e.sessionId === sessionId);
-    if (entry?.summary) {
-      return entry.summary;
-    }
-  } catch (err) {
-    log(`Failed to read sessions index: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  return null;
-}
-
-/**
- * Archive the full transcript to conversations/ before compaction.
- */
-function createPreCompactHook(): HookCallback {
-  return async (input, _toolUseId, _context) => {
-    const preCompact = input as PreCompactHookInput;
-    const transcriptPath = preCompact.transcript_path;
-    const sessionId = preCompact.session_id;
-
-    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
-      log('No transcript found for archiving');
-      return {};
+    if (code !== 0) {
+      throw new Error(`codex exited with code ${code}`);
     }
 
+    if (!fs.existsSync(outputPath)) {
+      throw new Error('codex output file missing');
+    }
+
+    const raw = fs.readFileSync(outputPath, 'utf-8').trim();
+    if (!raw) {
+      throw new Error('codex output was empty');
+    }
+
+    return parseAgentResponse(raw);
+  } finally {
     try {
-      const content = fs.readFileSync(transcriptPath, 'utf-8');
-      const messages = parseTranscript(content);
-
-      if (messages.length === 0) {
-        log('No messages to archive');
-        return {};
-      }
-
-      const summary = getSessionSummary(sessionId, transcriptPath);
-      const name = summary ? sanitizeFilename(summary) : generateFallbackName();
-
-      const conversationsDir = '/workspace/group/conversations';
-      fs.mkdirSync(conversationsDir, { recursive: true });
-
-      const date = new Date().toISOString().split('T')[0];
-      const filename = `${date}-${name}.md`;
-      const filePath = path.join(conversationsDir, filename);
-
-      const markdown = formatTranscriptMarkdown(messages, summary);
-      fs.writeFileSync(filePath, markdown);
-
-      log(`Archived conversation to ${filePath}`);
-    } catch (err) {
-      log(`Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`);
-    }
-
-    return {};
-  };
-}
-
-function sanitizeFilename(summary: string): string {
-  return summary
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 50);
-}
-
-function generateFallbackName(): string {
-  const time = new Date();
-  return `conversation-${time.getHours().toString().padStart(2, '0')}${time.getMinutes().toString().padStart(2, '0')}`;
-}
-
-interface ParsedMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-function parseTranscript(content: string): ParsedMessage[] {
-  const messages: ParsedMessage[] = [];
-
-  for (const line of content.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === 'user' && entry.message?.content) {
-        const text = typeof entry.message.content === 'string'
-          ? entry.message.content
-          : entry.message.content.map((c: { text?: string }) => c.text || '').join('');
-        if (text) messages.push({ role: 'user', content: text });
-      } else if (entry.type === 'assistant' && entry.message?.content) {
-        const textParts = entry.message.content
-          .filter((c: { type: string }) => c.type === 'text')
-          .map((c: { text: string }) => c.text);
-        const text = textParts.join('');
-        if (text) messages.push({ role: 'assistant', content: text });
-      }
+      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
     } catch {
     }
   }
-
-  return messages;
 }
 
-function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | null): string {
-  const now = new Date();
-  const formatDateTime = (d: Date) => d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true
-  });
-
-  const lines: string[] = [];
-  lines.push(`# ${title || 'Conversation'}`);
-  lines.push('');
-  lines.push(`Archived: ${formatDateTime(now)}`);
-  lines.push('');
-  lines.push('---');
-  lines.push('');
-
-  for (const msg of messages) {
-    const sender = msg.role === 'user' ? 'User' : 'Andy';
-    const content = msg.content.length > 2000
-      ? msg.content.slice(0, 2000) + '...'
-      : msg.content;
-    lines.push(`**${sender}**: ${content}`);
-    lines.push('');
+async function runCodexWithFallback(prompt: string, resume: boolean): Promise<AgentResponse> {
+  if (!resume) {
+    return runCodex(prompt, false);
   }
 
-  return lines.join('\n');
+  try {
+    return await runCodex(prompt, true);
+  } catch (err) {
+    log(`Resume failed, retrying without resume: ${err instanceof Error ? err.message : String(err)}`);
+    return runCodex(prompt, false);
+  }
 }
 
 async function main(): Promise<void> {
@@ -216,70 +416,34 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const ipcMcp = createIpcMcp({
-    chatJid: input.chatJid,
-    groupFolder: input.groupFolder,
-    isMain: input.isMain
-  });
-
-  let result: string | null = null;
-  let newSessionId: string | undefined;
-
-  // Add context for scheduled tasks
-  let prompt = input.prompt;
-  if (input.isScheduledTask) {
-    prompt = `[SCHEDULED TASK - You are running automatically, not in response to a user message. Use mcp__nanoclaw__send_message if needed to communicate with the user.]\n\n${input.prompt}`;
-  }
+  const prompt = buildPrompt(input);
+  const shouldResume = Boolean(input.sessionId);
 
   try {
-    log('Starting agent...');
+    const response = await runCodexWithFallback(prompt, shouldResume);
+    const warnings = processActions(response.actions || [], input);
 
-    for await (const message of query({
-      prompt,
-      options: {
-        cwd: '/workspace/group',
-        resume: input.sessionId,
-        allowedTools: [
-          'Bash',
-          'Read', 'Write', 'Edit', 'Glob', 'Grep',
-          'WebSearch', 'WebFetch',
-          'mcp__nanoclaw__*'
-        ],
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        settingSources: ['project'],
-        mcpServers: {
-          nanoclaw: ipcMcp
-        },
-        hooks: {
-          PreCompact: [{ hooks: [createPreCompactHook()] }]
-        }
-      }
-    })) {
-      if (message.type === 'system' && message.subtype === 'init') {
-        newSessionId = message.session_id;
-        log(`Session initialized: ${newSessionId}`);
-      }
+    const warningText = warnings.length > 0
+      ? `\n\nWarnings:\n- ${warnings.join('\n- ')}`
+      : '';
 
-      if ('result' in message && message.result) {
-        result = message.result as string;
-      }
-    }
+    const replyText = (response.reply || '').trim() + warningText;
+    const result = replyText.trim() ? replyText.trim() : null;
 
-    log('Agent completed successfully');
+    const shouldTrackSession = !input.isScheduledTask || Boolean(input.sessionId);
+    const newSessionId = shouldTrackSession ? 'codex-last' : undefined;
+
     writeOutput({
       status: 'success',
       result,
       newSessionId
     });
-
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     log(`Agent error: ${errorMessage}`);
     writeOutput({
       status: 'error',
       result: null,
-      newSessionId,
       error: errorMessage
     });
     process.exit(1);

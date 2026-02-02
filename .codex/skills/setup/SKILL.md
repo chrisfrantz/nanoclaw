@@ -71,49 +71,18 @@ Tell the user:
 
 **Use the `/convert-to-docker` skill** to convert the codebase to Docker, then continue to Section 3.
 
-## 3. Configure Claude Authentication
+## 3. Configure Codex Authentication
 
-Ask the user:
-> Do you want to use your **Claude subscription** (Pro/Max) or an **Anthropic API key**?
+Ask the user for an OpenAI API key for Codex and create `.env`:
 
-### Option 1: Claude Subscription (Recommended)
-
-Ask the user:
-> Want me to grab the OAuth token from your current Claude session?
-
-If yes:
 ```bash
-TOKEN=$(cat ~/.claude/.credentials.json 2>/dev/null | jq -r '.claudeAiOauth.accessToken // empty')
-if [ -n "$TOKEN" ]; then
-  echo "CLAUDE_CODE_OAUTH_TOKEN=$TOKEN" > .env
-  echo "Token configured: ${TOKEN:0:20}...${TOKEN: -4}"
-else
-  echo "No token found - are you logged in to Claude Code?"
-fi
+echo 'CODEX_API_KEY=' > .env
 ```
 
-If the token wasn't found, tell the user:
-> Run `claude` in another terminal and log in first, then come back here.
+Tell the user to paste their key, then verify:
 
-### Option 2: API Key
-
-Ask if they have an existing key to copy or need to create one.
-
-**Copy existing:**
 ```bash
-grep "^ANTHROPIC_API_KEY=" /path/to/source/.env > .env
-```
-
-**Create new:**
-```bash
-echo 'ANTHROPIC_API_KEY=' > .env
-```
-
-Tell the user to add their key from https://console.anthropic.com/
-
-**Verify:**
-```bash
-KEY=$(grep "^ANTHROPIC_API_KEY=" .env | cut -d= -f2)
+KEY=$(grep "^CODEX_API_KEY=" .env | cut -d= -f2)
 [ -n "$KEY" ] && echo "API key configured: ${KEY:0:10}...${KEY: -4}" || echo "Missing"
 ```
 
@@ -125,7 +94,7 @@ Build the NanoClaw agent container:
 ./container/build.sh
 ```
 
-This creates the `nanoclaw-agent:latest` image with Node.js, Chromium, Claude Code CLI, and agent-browser.
+This creates the `nanoclaw-agent:latest` image with Node.js, Chromium, Codex CLI, and agent-browser.
 
 Verify the build succeeded by running a simple test (this auto-detects which runtime you're using):
 
@@ -162,11 +131,11 @@ If it says "Already authenticated", skip to the next step.
 Ask the user:
 > What trigger word do you want to use? (default: `Andy`)
 >
-> Messages starting with `@TriggerWord` will be sent to Claude.
+> Messages starting with `@TriggerWord` will be sent to Codex.
 
 If they choose something other than `Andy`, update it in these places:
-1. `groups/CLAUDE.md` - Change "# Andy" and "You are Andy" to the new name
-2. `groups/main/CLAUDE.md` - Same changes at the top
+1. `groups/MEMORY.md` - Change "# Andy" and "You are Andy" to the new name
+2. `groups/main/MEMORY.md` - Same changes at the top
 3. `data/registered_groups.json` - Use `@NewName` as the trigger when registering groups
 
 Store their choice - you'll use it when creating the registered_groups.json and when telling them how to test.
@@ -220,7 +189,7 @@ mkdir -p groups/main/logs
 Ask the user:
 > Do you want the agent to be able to access any directories **outside** the NanoClaw project?
 >
-> Examples: Git repositories, project folders, documents you want Claude to work on.
+> Examples: Git repositories, project folders, documents you want Codex to work on.
 >
 > **Note:** This is optional. Without configuration, agents can only access their own group folders.
 
@@ -398,7 +367,7 @@ The user should receive a response in WhatsApp.
 
 **Service not starting**: Check `logs/nanoclaw.error.log`
 
-**Container agent fails with "Claude Code process exited with code 1"**:
+**Container agent fails with "Codex CLI process exited with code 1"**:
 - Ensure the container runtime is running:
   - Apple Container: `container system start`
   - Docker: `docker info` (start Docker Desktop on macOS, or `sudo systemctl start docker` on Linux)

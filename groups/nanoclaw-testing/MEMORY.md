@@ -5,7 +5,7 @@ This group is used for testing NanoClaw features and functionality.
 ## What You Can Do
 
 - Answer questions and have conversations
-- Search the web and fetch content from URLs
+- Use shell tools (curl/wget) and agent-browser for web access
 - Read and write files in your workspace
 - Run bash commands in your sandbox
 - Schedule tasks to run later or on a recurring basis
@@ -15,11 +15,11 @@ This group is used for testing NanoClaw features and functionality.
 
 You have access to Qwibit operations data at `/workspace/extra/qwibit-ops/` with these key areas:
 
-- **sales/** - Pipeline, deals, playbooks, pitch materials (see `sales/CLAUDE.md`)
-- **clients/** - Active accounts, service delivery, client management (see `clients/CLAUDE.md`)
-- **company/** - Strategy, thesis, operational philosophy (see `company/CLAUDE.md`)
+- **sales/** - Pipeline, deals, playbooks, pitch materials (see `sales/MEMORY.md`)
+- **clients/** - Active accounts, service delivery, client management (see `clients/MEMORY.md`)
+- **company/** - Strategy, thesis, operational philosophy (see `company/MEMORY.md`)
 
-Read the CLAUDE.md files in each folder for role-specific context and workflows.
+Read the MEMORY.md files in each folder for role-specific context and workflows.
 
 **Key context:**
 - Qwibit is a B2B GEO (Generative Engine Optimization) agency

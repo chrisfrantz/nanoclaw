@@ -96,13 +96,13 @@ function buildVolumeMounts(group: RegisteredGroup, isMain: boolean): VolumeMount
     }
   }
 
-  // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
-  const groupSessionsDir = path.join(DATA_DIR, 'sessions', group.folder, '.claude');
+  // Per-group Codex sessions directory (isolated from other groups)
+  // Each group gets their own .codex/ to prevent cross-group session access
+  const groupSessionsDir = path.join(DATA_DIR, 'sessions', group.folder, '.codex');
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   mounts.push({
     hostPath: groupSessionsDir,
-    containerPath: '/home/node/.claude',
+    containerPath: '/home/node/.codex',
     readonly: false
   });
 
@@ -118,13 +118,13 @@ function buildVolumeMounts(group: RegisteredGroup, isMain: boolean): VolumeMount
   });
 
   // Environment file directory (workaround for Apple Container -i env var bug)
-  // Only expose specific auth variables needed by Claude Code, not the entire .env
+  // Only expose specific auth variables needed by Codex CLI, not the entire .env
   const envDir = path.join(DATA_DIR, 'env');
   fs.mkdirSync(envDir, { recursive: true });
   const envFile = path.join(projectRoot, '.env');
   if (fs.existsSync(envFile)) {
     const envContent = fs.readFileSync(envFile, 'utf-8');
-    const allowedVars = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
+    const allowedVars = ['CODEX_API_KEY'];
     const filteredLines = envContent
       .split('\n')
       .filter(line => {

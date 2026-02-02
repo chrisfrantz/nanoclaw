@@ -1,0 +1,45 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "reply": {
+      "type": "string",
+      "description": "Message to send back to the triggering chat (no assistant name prefix)."
+    },
+    "actions": {
+      "type": "array",
+      "description": "Side effects to request from the host.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "send_message",
+              "schedule_task",
+              "pause_task",
+              "resume_task",
+              "cancel_task",
+              "register_group",
+              "refresh_groups"
+            ]
+          },
+          "text": { "type": "string" },
+          "prompt": { "type": "string" },
+          "schedule_type": { "type": "string", "enum": ["cron", "interval", "once"] },
+          "schedule_value": { "type": "string" },
+          "context_mode": { "type": "string", "enum": ["group", "isolated"] },
+          "target_group": { "type": "string" },
+          "task_id": { "type": "string" },
+          "jid": { "type": "string" },
+          "name": { "type": "string" },
+          "folder": { "type": "string" },
+          "trigger": { "type": "string" }
+        },
+        "required": ["type"]
+      }
+    }
+  },
+  "required": ["reply", "actions"]
+}

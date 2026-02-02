@@ -1,6 +1,6 @@
 ## Type of Change
 
-- [ ] **Skill** - adds a new skill in `.claude/skills/`
+- [ ] **Skill** - adds a new skill in `.codex/skills/`
 - [ ] **Fix** - bug fix or security fix to source code
 - [ ] **Simplification** - reduces or simplifies source code
 
@@ -10,5 +10,5 @@
 ## For Skills
 
 - [ ] I have not made any changes to source code
-- [ ] My skill contains instructions for Claude to follow (not pre-built code)
+- [ ] My skill contains instructions for Codex to follow (not pre-built code)
 - [ ] I tested this skill on a fresh clone

@@ -1,6 +1,8 @@
 # Add Parallel AI Integration
 
-Adds Parallel AI MCP integration to NanoClaw for advanced web research capabilities.
+Legacy MCP-based integration notes for Parallel AI. The Codex version of NanoClaw uses IPC actions instead of MCP.
+
+> **Note:** Sections referencing `mcp__*` are legacy. Port by defining IPC actions + host-side API calls instead.
 
 ## What This Adds
 
@@ -69,69 +71,26 @@ Add `PARALLEL_API_KEY` to allowed environment variables in `src/container-runner
 
 Find the line:
 ```typescript
-const allowedVars = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
+const allowedVars = ['CODEX_API_KEY'];
 ```
 
 Replace with:
 ```typescript
-const allowedVars = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'PARALLEL_API_KEY'];
+const allowedVars = ['CODEX_API_KEY', 'PARALLEL_API_KEY'];
 ```
 
-### 4. Configure MCP Servers in Agent Runner
+### 4. Add Host-Side Integration (IPC Actions)
 
-Update `container/agent-runner/src/index.ts`:
+Codex does not use MCP in NanoClaw. Expose Parallel AI via IPC actions:
 
-Find the section where `mcpServers` is configured (around line 237-252):
-```typescript
-const mcpServers: Record<string, any> = {
-  nanoclaw: ipcMcp
-};
-```
+1. Add new actions to `container/agent-runner/response-schema.json` (e.g., `parallel_search`, `parallel_task`).
+2. Handle those actions in `container/agent-runner/src/index.ts` (write IPC files for the host).
+3. Implement the API calls on the host (new module + IPC processing in `src/index.ts`).
+4. Ensure results are sent back via `send_message`.
 
-Add Parallel AI MCP servers after the nanoclaw server:
-```typescript
-const mcpServers: Record<string, any> = {
-  nanoclaw: ipcMcp
-};
+### 5. Add Usage Instructions to MEMORY.md
 
-// Add Parallel AI MCP servers if API key is available
-const parallelApiKey = process.env.PARALLEL_API_KEY;
-if (parallelApiKey) {
-  mcpServers['parallel-search'] = {
-    type: 'http',  // REQUIRED: Must specify type for HTTP MCP servers
-    url: 'https://search-mcp.parallel.ai/mcp',
-    headers: {
-      'Authorization': `Bearer ${parallelApiKey}`
-    }
-  };
-  mcpServers['parallel-task'] = {
-    type: 'http',  // REQUIRED: Must specify type for HTTP MCP servers  
-    url: 'https://task-mcp.parallel.ai/mcp',
-    headers: {
-      'Authorization': `Bearer ${parallelApiKey}`
-    }
-  };
-  log('Parallel AI MCP servers configured');
-} else {
-  log('PARALLEL_API_KEY not set, skipping Parallel AI integration');
-}
-```
-
-Also update the `allowedTools` array to include Parallel MCP tools (around line 242-248):
-```typescript
-allowedTools: [
-  'Bash',
-  'Read', 'Write', 'Edit', 'Glob', 'Grep',
-  'WebSearch', 'WebFetch',
-  'mcp__nanoclaw__*',
-  'mcp__parallel-search__*',
-  'mcp__parallel-task__*'
-],
-```
-
-### 5. Add Usage Instructions to CLAUDE.md
-
-Add Parallel AI usage instructions to `groups/main/CLAUDE.md`:
+Add Parallel AI usage instructions to `groups/main/MEMORY.md`:
 
 Find the "## What You Can Do" section and add after the existing bullet points:
 ```markdown
@@ -290,6 +249,6 @@ To remove Parallel AI integration:
 
 1. Remove from .env: `sed -i.bak '/PARALLEL_API_KEY/d' .env`
 2. Revert changes to container-runner.ts and agent-runner/src/index.ts
-3. Remove Web Research Tools section from groups/main/CLAUDE.md
+3. Remove Web Research Tools section from groups/main/MEMORY.md
 4. Rebuild: `./container/build.sh && npm run build`
 5. Restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`

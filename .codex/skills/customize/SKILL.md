@@ -23,8 +23,7 @@ This skill helps users add capabilities or modify behavior. Use AskUserQuestion 
 | `src/db.ts` | Database initialization and queries |
 | `src/types.ts` | TypeScript interfaces |
 | `src/whatsapp-auth.ts` | Standalone WhatsApp authentication script |
-| `.mcp.json` | MCP server configuration (reference) |
-| `groups/CLAUDE.md` | Global memory/persona |
+| `groups/MEMORY.md` | Global memory/persona |
 
 ## Common Customization Patterns
 
@@ -37,12 +36,12 @@ Questions to ask:
 - Should messages from this channel go to existing groups or new ones?
 
 Implementation pattern:
-1. Find/add MCP server for the channel
+1. Find/add connector or API client for the channel
 2. Add connection and message handling in `src/index.ts`
 3. Store messages in the database (update `src/db.ts` if needed)
 4. Ensure responses route back to correct channel
 
-### Adding a New MCP Integration
+### Adding a New Integration
 
 Questions to ask:
 - What service? (Calendar, Notion, database, etc.)
@@ -50,9 +49,9 @@ Questions to ask:
 - Which groups should have access?
 
 Implementation:
-1. Add MCP server to the `mcpServers` config in `src/index.ts`
-2. Add tools to `allowedTools` array
-3. Document in `groups/CLAUDE.md`
+1. Add host-side integration and authentication
+2. Expose it via IPC actions (update the agent response schema + action handling)
+3. Document in `groups/MEMORY.md`
 
 ### Changing Assistant Behavior
 
@@ -61,15 +60,15 @@ Questions to ask:
 - Apply to all groups or specific ones?
 
 Simple changes → edit `src/config.ts`
-Persona changes → edit `groups/CLAUDE.md`
-Per-group behavior → edit specific group's `CLAUDE.md`
+Persona changes → edit `groups/MEMORY.md`
+Per-group behavior → edit specific group's `MEMORY.md`
 
 ### Adding New Commands
 
 Questions to ask:
 - What should the command do?
 - Available in all groups or main only?
-- Does it need new MCP tools?
+- Does it need new IPC actions?
 
 Implementation:
 1. Add command handling in `processMessage()` in `src/index.ts`
