@@ -434,8 +434,10 @@ async function main(): Promise<void> {
   try {
     const response = await runCodexWithFallback(prompt, shouldResume, input.model, input.reasoningEffort);
     const replyTrimmed = (response.reply || '').trim();
+    const suppressSendMessage = !input.isScheduledTask && replyTrimmed.length > 0;
     const actionsFiltered = (response.actions || []).filter(action => {
       if (action.type !== 'send_message') return true;
+      if (suppressSendMessage) return false;
       if (!('text' in action)) return true;
       const actionText = typeof action.text === 'string' ? action.text.trim() : '';
       return !(replyTrimmed && actionText && actionText === replyTrimmed);
