@@ -356,11 +356,10 @@ function runCodexCommand(args: string[]): Promise<{ code: number; stdout: string
   });
 }
 
-async function runCodex(prompt: string, resume: boolean, model?: string, reasoningEffort?: 'low' | 'medium' | 'high'): Promise<AgentResponse> {
+async function runCodex(prompt: string, model?: string, reasoningEffort?: 'low' | 'medium' | 'high'): Promise<AgentResponse> {
   const outputPath = path.join('/tmp', `codex-output-${crypto.randomUUID()}.json`);
   const args = [
     'exec',
-    ...(resume ? ['resume', '--last'] : []),
     '--skip-git-repo-check',
     ...(model ? ['--model', model] : []),
     ...(reasoningEffort ? ['--config', `model_reasoning_effort="${reasoningEffort}"`] : []),
@@ -400,24 +399,6 @@ async function runCodex(prompt: string, resume: boolean, model?: string, reasoni
   }
 }
 
-async function runCodexWithFallback(
-  prompt: string,
-  resume: boolean,
-  model?: string,
-  reasoningEffort?: 'low' | 'medium' | 'high'
-): Promise<AgentResponse> {
-  if (!resume) {
-    return runCodex(prompt, false, model, reasoningEffort);
-  }
-
-  try {
-    return await runCodex(prompt, true, model, reasoningEffort);
-  } catch (err) {
-    log(`Resume failed, retrying without resume: ${err instanceof Error ? err.message : String(err)}`);
-    return runCodex(prompt, false, model, reasoningEffort);
-  }
-}
-
 async function main(): Promise<void> {
   let input: ContainerInput;
 
@@ -435,10 +416,8 @@ async function main(): Promise<void> {
   }
 
   const prompt = buildPrompt(input);
-  const shouldResume = Boolean(input.sessionId);
-
   try {
-    const response = await runCodexWithFallback(prompt, shouldResume, input.model, input.reasoningEffort);
+    const response = await runCodex(prompt, input.model, input.reasoningEffort);
     const replyTrimmed = (response.reply || '').trim();
     const suppressSendMessage = !input.isScheduledTask && replyTrimmed.length > 0;
     const actionsFiltered = (response.actions || []).filter(action => {
@@ -457,13 +436,10 @@ async function main(): Promise<void> {
     const replyText = replyTrimmed + warningText;
     const result = replyText.trim() ? replyText.trim() : null;
 
-    const shouldTrackSession = !input.isScheduledTask || Boolean(input.sessionId);
-    const newSessionId = shouldTrackSession ? 'codex-last' : undefined;
-
     writeOutput({
       status: 'success',
       result,
-      newSessionId
+      newSessionId: undefined
     });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
