@@ -15,7 +15,7 @@ import {
   TIMEZONE
 } from './config.js';
 import { RegisteredGroup, Session, NewMessage } from './types.js';
-import { initDatabase, storeMessage, storeChatMetadata, getNewMessages, getMessagesSince, getAllTasks, getAllChats } from './db.js';
+import { initDatabase, storeMessage, storeChatMetadata, getNewMessages, getRecentMessages, getAllTasks, getAllChats } from './db.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { runContainerAgent, writeTasksSnapshot, writeGroupsSnapshot, AvailableGroup } from './container-runner.js';
 import { loadJson, saveJson } from './utils.js';
@@ -116,11 +116,10 @@ async function processMessage(msg: NewMessage): Promise<void> {
   const modelCommandHandled = await handleModelCommand(msg.chat_jid, strippedContent, msg.timestamp);
   if (modelCommandHandled) return;
 
-  // Get all messages since last agent interaction so the session has full context
-  const sinceTimestamp = lastAgentTimestamp[msg.chat_jid] || '';
-  const missedMessages = getMessagesSince(msg.chat_jid, sinceTimestamp);
+  // Build a rolling window of recent messages for context
+  const recentMessages = getRecentMessages(msg.chat_jid, 40);
 
-  const lines = missedMessages.map(m => {
+  const lines = recentMessages.map(m => {
     // Escape XML special characters in content
     const escapeXml = (s: string) => s
       .replace(/&/g, '&amp;')
@@ -133,7 +132,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
 
   if (!prompt) return;
 
-  logger.info({ group: group.name, messageCount: missedMessages.length }, 'Processing message');
+  logger.info({ group: group.name, messageCount: recentMessages.length }, 'Processing message');
 
   await setTyping(msg.chat_jid, true);
   const modelSelection = resolveModelSelection(strippedContent, msg.chat_jid, modelPrefs);
@@ -141,8 +140,12 @@ async function processMessage(msg: NewMessage): Promise<void> {
   await setTyping(msg.chat_jid, false);
 
   if (response) {
-    lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
-    await sendMessage(msg.chat_jid, response);
+    const sentAt = await sendMessage(msg.chat_jid, response);
+    if (sentAt) {
+      lastAgentTimestamp[msg.chat_jid] = sentAt;
+    } else {
+      lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
+    }
   }
 }
 
@@ -199,17 +202,29 @@ async function runAgent(
   }
 }
 
-async function sendMessage(chatJid: string, text: string): Promise<void> {
+async function sendMessage(chatJid: string, text: string): Promise<string | null> {
   const chatId = getTelegramChatId(chatJid);
   if (!chatId) {
     logger.warn({ chatJid }, 'Unknown chat id format; message not sent');
-    return;
+    return null;
   }
   try {
-    await telegramBot.telegram.sendMessage(chatId, text);
+    const sent = await telegramBot.telegram.sendMessage(chatId, text);
+    const timestamp = new Date((sent.date || Math.floor(Date.now() / 1000)) * 1000).toISOString();
+    storeMessage({
+      id: `out-${chatId}-${sent.message_id}`,
+      chatJid,
+      sender: `bot:${chatId}`,
+      senderName: ASSISTANT_NAME,
+      content: text,
+      timestamp,
+      isFromMe: true
+    });
     logger.info({ chatJid, length: text.length }, 'Message sent');
+    return timestamp;
   } catch (err) {
     logger.error({ chatJid, err }, 'Failed to send message');
+    return null;
   }
 }
 

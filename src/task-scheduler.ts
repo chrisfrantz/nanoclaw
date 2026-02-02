@@ -14,7 +14,7 @@ const logger = pino({
 });
 
 export interface SchedulerDependencies {
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (jid: string, text: string) => Promise<string | null>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   getSessions: () => Record<string, string>;
 }

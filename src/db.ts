@@ -198,6 +198,18 @@ export function getMessagesSince(chatJid: string, sinceTimestamp: string): NewMe
   return db.prepare(sql).all(chatJid, sinceTimestamp) as NewMessage[];
 }
 
+export function getRecentMessages(chatJid: string, limit = 40): NewMessage[] {
+  const sql = `
+    SELECT id, chat_jid, sender, sender_name, content, timestamp
+    FROM messages
+    WHERE chat_jid = ?
+    ORDER BY timestamp DESC
+    LIMIT ?
+  `;
+  const rows = db.prepare(sql).all(chatJid, limit) as NewMessage[];
+  return rows.reverse();
+}
+
 export function createTask(task: Omit<ScheduledTask, 'last_run' | 'last_result'>): void {
   db.prepare(`
     INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at)
