@@ -24,6 +24,7 @@ const logger = pino({
 });
 
 let warnedMissingAgentRunnerDist = false;
+let warnedMissingCodexAuth = false;
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -133,6 +134,10 @@ function buildVolumeMounts(
     }
     if (fs.existsSync(hostConfigPath) && !fs.existsSync(targetConfigPath)) {
       fs.copyFileSync(hostConfigPath, targetConfigPath);
+    }
+    if (!fs.existsSync(targetAuthPath) && !warnedMissingCodexAuth) {
+      warnedMissingCodexAuth = true;
+      logger.error('Codex auth missing: no CODEX_API_KEY and no ~/.codex/auth.json to seed');
     }
   } catch (err) {
     logger.warn({ err }, 'Failed to seed Codex auth/config into session dir');

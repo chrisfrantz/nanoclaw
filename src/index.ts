@@ -806,11 +806,26 @@ function ensureContainerSystemRunning(): void {
   }
 }
 
+function ensureCodexAuthSeeded(): void {
+  const envPath = path.join(DATA_DIR, 'env', 'env');
+  const codeKey = process.env.CODEX_API_KEY;
+  if (codeKey) {
+    fs.mkdirSync(path.dirname(envPath), { recursive: true });
+    fs.writeFileSync(envPath, `CODEX_API_KEY=${codeKey}\n`);
+    return;
+  }
+  const hostAuth = path.join(process.env.HOME || '', '.codex', 'auth.json');
+  if (!fs.existsSync(hostAuth)) {
+    logger.error('No CODEX_API_KEY in .env and no ~/.codex/auth.json found. Codex cannot authenticate.');
+  }
+}
+
 async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
   loadState();
+  ensureCodexAuthSeeded();
   await startTelegramBot();
   startSchedulerLoop({
     sendMessage,
