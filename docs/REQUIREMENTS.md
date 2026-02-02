@@ -186,7 +186,7 @@ These are the creator's settings, stored here for reference:
 
 - **Trigger**: `@Andy` (case insensitive)
 - **Response prefix**: `Andy:`
-- **Persona**: Default Codex (no custom personality)
+- **Persona**: See `docs/SOUL.md`
 - **Main channel**: Personal Telegram DM (messaging your bot)
 
 ---

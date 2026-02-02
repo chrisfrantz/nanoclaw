@@ -124,6 +124,7 @@ Key files:
 - `src/task-scheduler.ts` - Runs scheduled tasks
 - `src/db.ts` - SQLite operations
 - `groups/*/MEMORY.md` - Per-group memory
+- `docs/SOUL.md` - Agent voice and response guidelines
 
 ## FAQ
 

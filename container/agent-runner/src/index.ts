@@ -96,6 +96,9 @@ function buildPrompt(input: ContainerInput): string {
   const globalMemoryPath = input.isMain
     ? path.join(PROJECT_ROOT, 'groups', 'global', 'MEMORY.md')
     : '/workspace/global/MEMORY.md';
+  const soulDocPath = input.isMain
+    ? path.join(PROJECT_ROOT, 'docs', 'SOUL.md')
+    : '/workspace/global/SOUL.md';
 
   const memorySections: string[] = [];
   const globalMemory = readOptionalFile(globalMemoryPath);
@@ -105,6 +108,10 @@ function buildPrompt(input: ContainerInput): string {
   const groupMemory = readOptionalFile(groupMemoryPath);
   if (groupMemory) {
     memorySections.push(`## Group Memory (${groupMemoryPath})\n${truncate(groupMemory, MAX_MEMORY_CHARS)}`);
+  }
+  const soulDoc = readOptionalFile(soulDocPath);
+  if (soulDoc) {
+    memorySections.push(`## Soul Doc (${soulDocPath})\n${truncate(soulDoc, MAX_MEMORY_CHARS)}`);
   }
 
   const memoryBlock = memorySections.length > 0
