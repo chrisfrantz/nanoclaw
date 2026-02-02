@@ -122,6 +122,21 @@ function buildVolumeMounts(
   const sessionSuffix = group.folder + (sessionScope === 'review' ? '-review' : '');
   const groupSessionsDir = path.join(DATA_DIR, 'sessions', sessionSuffix, '.codex');
   fs.mkdirSync(groupSessionsDir, { recursive: true });
+  const hostCodexDir = path.join(homeDir, '.codex');
+  const hostAuthPath = path.join(hostCodexDir, 'auth.json');
+  const hostConfigPath = path.join(hostCodexDir, 'config.toml');
+  const targetAuthPath = path.join(groupSessionsDir, 'auth.json');
+  const targetConfigPath = path.join(groupSessionsDir, 'config.toml');
+  try {
+    if (fs.existsSync(hostAuthPath) && !fs.existsSync(targetAuthPath)) {
+      fs.copyFileSync(hostAuthPath, targetAuthPath);
+    }
+    if (fs.existsSync(hostConfigPath) && !fs.existsSync(targetConfigPath)) {
+      fs.copyFileSync(hostConfigPath, targetConfigPath);
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Failed to seed Codex auth/config into session dir');
+  }
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.codex',
