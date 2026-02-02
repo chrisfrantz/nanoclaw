@@ -20,6 +20,7 @@ Date: 2026-02-02
 - Added model routing with per-chat preferences and keyword-based auto selection (code/chat/write) plus command handling.
 - Added rolling conversation context (last 40 messages) and stored outgoing bot replies in SQLite so context persists even if Codex session resume fails.
 - Deduplicated send_message actions that matched reply text to prevent double replies.
+- Added host-side IPC duplicate suppression (drops IPC message if same text was just sent) and mounted host `container/agent-runner/dist` into the container to force latest runner code; build now compiles agent-runner dist.
 
 ## Assumptions
 - Codex CLI is installed in the container via `npm install -g @openai/codex`.
@@ -30,7 +31,7 @@ Date: 2026-02-02
 - First private DM will auto-register as `main` unless `TELEGRAM_AUTO_REGISTER=false`.
 
 ## Remaining / Follow-ups
-- Build the container image after pulling (`./container/build.sh`) so Codex CLI and schema are included.
+- Ensure `npm run build` is run after pulling to refresh host + agent-runner dist (now required for the /app/dist mount).
 - Ensure `.env` contains `CODEX_API_KEY` and is mounted into the container (done via `src/container-runner.ts`).
 - Validate session behavior across messages in real usage (Codex resume behavior may differ).
 - Legacy MCP-based skills (`add-gmail`, `add-parallel`) need IPC-action ports if you want those features.

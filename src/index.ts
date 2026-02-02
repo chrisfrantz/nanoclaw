@@ -40,6 +40,8 @@ let sessions: Session = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let modelPrefs: Record<string, ModelPreference> = {};
+const DUPLICATE_WINDOW_MS = 5000;
+const recentOutgoing: Record<string, { text: string; timestamp: number }> = {};
 
 function getTelegramChatId(chatJid: string): string | null {
   if (!chatJid.startsWith('telegram:')) return null;
@@ -55,6 +57,17 @@ async function setTyping(chatJid: string, isTyping: boolean): Promise<void> {
   } catch (err) {
     logger.debug({ chatJid, err }, 'Failed to update typing status');
   }
+}
+
+function isDuplicateOutgoing(chatJid: string, text: string): boolean {
+  const last = recentOutgoing[chatJid];
+  if (!last) return false;
+  if (Date.now() - last.timestamp > DUPLICATE_WINDOW_MS) return false;
+  return last.text === text;
+}
+
+function trackOutgoing(chatJid: string, text: string): void {
+  recentOutgoing[chatJid] = { text, timestamp: Date.now() };
 }
 
 function loadState(): void {
@@ -211,6 +224,7 @@ async function sendMessage(chatJid: string, text: string): Promise<string | null
   try {
     const sent = await telegramBot.telegram.sendMessage(chatId, text);
     const timestamp = new Date((sent.date || Math.floor(Date.now() / 1000)) * 1000).toISOString();
+    trackOutgoing(chatJid, text);
     storeMessage({
       id: `out-${chatId}-${sent.message_id}`,
       chatJid,
@@ -356,8 +370,13 @@ function startIpcWatcher(): void {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
                 if (isMain || (targetGroup && targetGroup.folder === sourceGroup)) {
-                  await sendMessage(data.chatJid, data.text);
-                  logger.info({ chatJid: data.chatJid, sourceGroup }, 'IPC message sent');
+                  const text = data.text.trim();
+                  if (isDuplicateOutgoing(data.chatJid, text)) {
+                    logger.info({ chatJid: data.chatJid, sourceGroup }, 'Duplicate IPC message suppressed');
+                  } else {
+                    await sendMessage(data.chatJid, text);
+                    logger.info({ chatJid: data.chatJid, sourceGroup }, 'IPC message sent');
+                  }
                 } else {
                   logger.warn({ chatJid: data.chatJid, sourceGroup }, 'Unauthorized IPC message attempt blocked');
                 }

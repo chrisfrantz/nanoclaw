@@ -23,6 +23,8 @@ const logger = pino({
   transport: { target: 'pino-pretty', options: { colorize: true } }
 });
 
+let warnedMissingAgentRunnerDist = false;
+
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
@@ -63,6 +65,18 @@ function buildVolumeMounts(group: RegisteredGroup, isMain: boolean): VolumeMount
   const mounts: VolumeMount[] = [];
   const homeDir = getHomeDir();
   const projectRoot = process.cwd();
+  const agentRunnerDist = path.join(projectRoot, 'container', 'agent-runner', 'dist');
+
+  if (fs.existsSync(agentRunnerDist)) {
+    mounts.push({
+      hostPath: agentRunnerDist,
+      containerPath: '/app/dist',
+      readonly: true
+    });
+  } else if (!warnedMissingAgentRunnerDist) {
+    warnedMissingAgentRunnerDist = true;
+    logger.warn({ agentRunnerDist }, 'Agent runner dist not found; using image dist');
+  }
 
   if (isMain) {
     // Main gets the entire project root mounted
