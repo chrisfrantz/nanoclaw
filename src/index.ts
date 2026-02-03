@@ -270,6 +270,9 @@ async function runAgent(
 
     if (output.status === 'error') {
       logger.error({ group: group.name, error: output.error }, 'Container agent error');
+      if (output.error && output.error.toLowerCase().includes('timed out')) {
+        return 'timed out running codex. try again or narrow the request.';
+      }
       return null;
     }
 
