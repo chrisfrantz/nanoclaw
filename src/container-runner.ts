@@ -177,6 +177,16 @@ function buildVolumeMounts(
     readonly: false
   });
 
+  // Persistent notes (local-only, gitignored). Useful for running logs, scratchpads, etc.
+  // Mounted for all groups so they can write durable state without touching tracked files.
+  const groupNotesDir = path.join(DATA_DIR, 'notes', group.folder);
+  fs.mkdirSync(groupNotesDir, { recursive: true });
+  mounts.push({
+    hostPath: groupNotesDir,
+    containerPath: '/workspace/notes',
+    readonly: false
+  });
+
   // Persistent SSH config/keys for main only.
   // NOTE: Containers are ephemeral per run. Any keys written inside the container will be lost unless mounted.
   if (isMain) {

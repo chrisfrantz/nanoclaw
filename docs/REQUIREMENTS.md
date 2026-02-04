@@ -97,6 +97,7 @@ A personal Codex assistant accessible via Telegram, with minimal custom code.
 - **Per-group memory**: Each group has a folder with its own `MEMORY.md`
 - **Global memory**: Root `MEMORY.md` is read by all groups, but only writable from "main" (self-chat)
 - **Files**: Groups can create/read files in their folder and reference them
+- **Local-only notes**: Each group also has a persistent, gitignored notes directory at `data/notes/{group}/` (mounted at `/workspace/notes`) for running logs and scratchpads
 - Agent runs in the group's folder, and reads both MEMORY.md files for context
 
 ### Session Management

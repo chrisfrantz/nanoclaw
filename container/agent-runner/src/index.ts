@@ -49,12 +49,14 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 const GROUP_WORKDIR = '/workspace/group';
 const PROJECT_ROOT = '/workspace/project';
+const NOTES_DIR = '/workspace/notes';
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 const RESPONSE_SCHEMA_PATH = '/app/response-schema.json';
 
 const MAX_MEMORY_CHARS = 12000;
+const MAX_JOURNAL_TAIL_CHARS = 6000;
 
 async function readStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -91,6 +93,30 @@ function readOptionalFile(filePath: string): string | null {
   }
 }
 
+function readOptionalFileTail(filePath: string, maxChars: number): string | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return null;
+
+    const fileSize = stat.size;
+    if (fileSize <= 0) return '';
+
+    const bytesToRead = Math.min(fileSize, Math.max(1, maxChars));
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const buf = Buffer.alloc(bytesToRead);
+      fs.readSync(fd, buf, 0, bytesToRead, fileSize - bytesToRead);
+      return buf.toString('utf-8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (err) {
+    log(`Failed to read tail ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
 function buildPrompt(input: ContainerInput): string {
   const groupMemoryPath = path.join(GROUP_WORKDIR, 'MEMORY.md');
   const globalMemoryPath = input.isMain
@@ -99,6 +125,7 @@ function buildPrompt(input: ContainerInput): string {
   const soulDocPath = input.isMain
     ? path.join(PROJECT_ROOT, 'docs', 'SOUL.md')
     : '/workspace/global/SOUL.md';
+  const journalPath = path.join(NOTES_DIR, 'journal.md');
 
   const memorySections: string[] = [];
   const globalMemory = readOptionalFile(globalMemoryPath);
@@ -112,6 +139,10 @@ function buildPrompt(input: ContainerInput): string {
   const soulDoc = readOptionalFile(soulDocPath);
   if (soulDoc) {
     memorySections.push(`## Soul Doc (${soulDocPath})\n${truncate(soulDoc, MAX_MEMORY_CHARS)}`);
+  }
+  const journalTail = readOptionalFileTail(journalPath, MAX_JOURNAL_TAIL_CHARS);
+  if (journalTail) {
+    memorySections.push(`## Notes Journal Tail (${journalPath})\n${truncate(journalTail, MAX_JOURNAL_TAIL_CHARS)}`);
   }
 
   const memoryBlock = memorySections.length > 0
@@ -139,6 +170,7 @@ function buildPrompt(input: ContainerInput): string {
     `- chatJid: ${input.chatJid}`,
     `- isMain: ${input.isMain}`,
     `- workspace: ${GROUP_WORKDIR} (read/write)`,
+    `- notesDir: ${NOTES_DIR} (persistent, local-only)`,
     `- projectRoot (main only): ${PROJECT_ROOT}`,
     `- tasks snapshot: ${path.join(IPC_DIR, 'current_tasks.json')}`,
     `- available groups snapshot (main only): ${path.join(IPC_DIR, 'available_groups.json')}`,
@@ -146,6 +178,7 @@ function buildPrompt(input: ContainerInput): string {
     'Memory rules:',
     '- When the user says "remember this", update the group memory file.',
     '- When the user says "remember this globally" (main only), update the global memory file.',
+    '- Use the notes directory for local-only running logs and scratch work (e.g. append to /workspace/notes/journal.md).',
     '',
     'Actions:',
     '- send_message: send a message to the current chat.',

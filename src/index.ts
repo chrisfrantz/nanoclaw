@@ -42,10 +42,64 @@ let lastAgentTimestamp: Record<string, string> = {};
 let modelPrefs: Record<string, ModelPreference> = {};
 const DUPLICATE_WINDOW_MS = 5000;
 const recentOutgoing: Record<string, { text: string; timestamp: number }> = {};
+const JOURNAL_MAX_CHARS_PER_FIELD = 1200;
 
 function getTelegramChatId(chatJid: string): string | null {
   if (!chatJid.startsWith('telegram:')) return null;
   return chatJid.slice('telegram:'.length);
+}
+
+function redactSensitive(text: string): string {
+  const replacements: Array<[RegExp, string]> = [
+    [/-----BEGIN OPENSSH PRIVATE KEY-----[\s\S]*?-----END OPENSSH PRIVATE KEY-----/g, '[REDACTED OPENSSH PRIVATE KEY]'],
+    [/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g, '[REDACTED PRIVATE KEY]'],
+    [/\bsk-[A-Za-z0-9]{20,}\b/g, 'sk-[REDACTED]'],
+    [/\bghp_[A-Za-z0-9]{20,}\b/g, 'ghp_[REDACTED]'],
+    [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, 'github_pat_[REDACTED]'],
+    [/\b\d{8,12}:[A-Za-z0-9_-]{30,}\b/g, '[REDACTED TELEGRAM TOKEN]']
+  ];
+
+  let out = text;
+  for (const [re, sub] of replacements) out = out.replace(re, sub);
+  return out;
+}
+
+function clampText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return text.slice(0, maxChars) + '\n…(truncated)\n';
+}
+
+function appendJournalEntry(params: {
+  groupFolder: string;
+  chatJid: string;
+  userText: string;
+  replyText: string;
+  model: string;
+  reasoningEffort?: 'low' | 'medium' | 'high';
+  timestamp: string;
+}): void {
+  const notesDir = path.join(DATA_DIR, 'notes', params.groupFolder);
+  const journalPath = path.join(notesDir, 'journal.md');
+
+  try {
+    fs.mkdirSync(notesDir, { recursive: true });
+    const effort = params.reasoningEffort ? ` (reasoning ${params.reasoningEffort})` : '';
+    const user = clampText(redactSensitive(params.userText.trim()), JOURNAL_MAX_CHARS_PER_FIELD);
+    const reply = clampText(redactSensitive(params.replyText.trim()), JOURNAL_MAX_CHARS_PER_FIELD);
+
+    const entry = [
+      `## ${params.timestamp}`,
+      `- chat: ${params.chatJid}`,
+      `- model: ${params.model}${effort}`,
+      `- user: ${user.replace(/\n/g, '\n  ')}`,
+      `- reply: ${reply.replace(/\n/g, '\n  ')}`,
+      ``
+    ].join('\n');
+
+    fs.appendFileSync(journalPath, entry, 'utf-8');
+  } catch (err) {
+    logger.debug({ err, groupFolder: params.groupFolder }, 'Failed to append journal entry');
+  }
 }
 
 async function setTyping(chatJid: string, isTyping: boolean): Promise<void> {
@@ -200,6 +254,16 @@ async function processMessage(msg: NewMessage): Promise<void> {
     } else {
       lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
     }
+
+    appendJournalEntry({
+      groupFolder: group.folder,
+      chatJid: msg.chat_jid,
+      userText: strippedContent,
+      replyText: response,
+      model: modelSelection.model,
+      reasoningEffort: modelSelection.reasoningEffort,
+      timestamp: sentAt || msg.timestamp
+    });
 
     const shouldReview = isMainGroup && shouldAutoReview(strippedContent);
     logger.info({ shouldReview, chatJid: msg.chat_jid }, 'Review check');

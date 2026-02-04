@@ -143,6 +143,7 @@ nanoclaw/
 │   ├── sessions.json              # Session markers per group
 │   ├── registered_groups.json     # Group JID → folder mapping
 │   ├── router_state.json          # Last processed timestamp + last agent timestamps
+│   ├── notes/                     # Local-only per-group notes (gitignored, mounted at /workspace/notes)
 │   ├── env/env                    # Copy of .env for container mounting
 │   └── ipc/                       # Container IPC (messages/, tasks/)
 │

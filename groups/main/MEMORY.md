@@ -64,6 +64,11 @@ If git auth fails (`Permission denied (publickey)`), check:
 - `ls -la ~/.ssh`
 - `git ls-remote git@github.com:chrisfrantz/framekeep.git HEAD`
 
+## Local-Only Notes
+
+- Persistent notes dir: `/workspace/notes/` (host: `data/notes/main/`, gitignored)
+- Running log: `/workspace/notes/journal.md`
+
 ## Container Mounts
 
 Main has access to the entire project:

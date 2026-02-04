@@ -30,6 +30,14 @@ Files you create are saved in `/workspace/group/`. Use this for notes, research,
 
 Your `MEMORY.md` file in that folder is your memory - update it with important context you want to remember.
 
+## Local-Only Notes (Persistent)
+
+Use `/workspace/notes/` for a running log and scratchpads. This directory is mounted from the host at `data/notes/{group}/` and is gitignored (local only).
+
+Suggested files:
+- `/workspace/notes/journal.md` (append-only running log)
+- `/workspace/notes/scratch.md` (working notes)
+
 ## Memory
 
 Use `conversations/` to store searchable summaries or archives of important conversations.
