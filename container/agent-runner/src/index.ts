@@ -83,6 +83,21 @@ function truncate(text: string, maxChars: number): string {
   return text.slice(0, maxChars) + '\n…(truncated)\n';
 }
 
+function redactSensitive(text: string): string {
+  const replacements: Array<[RegExp, string]> = [
+    [/-----BEGIN OPENSSH PRIVATE KEY-----[\s\S]*?-----END OPENSSH PRIVATE KEY-----/g, '[REDACTED OPENSSH PRIVATE KEY]'],
+    [/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g, '[REDACTED PRIVATE KEY]'],
+    [/\bsk-[A-Za-z0-9]{20,}\b/g, 'sk-[REDACTED]'],
+    [/\bghp_[A-Za-z0-9]{20,}\b/g, 'ghp_[REDACTED]'],
+    [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, 'github_pat_[REDACTED]'],
+    [/\b\d{8,12}:[A-Za-z0-9_-]{30,}\b/g, '[REDACTED TELEGRAM TOKEN]']
+  ];
+
+  let out = text;
+  for (const [re, sub] of replacements) out = out.replace(re, sub);
+  return out;
+}
+
 function readOptionalFile(filePath: string): string | null {
   try {
     if (!fs.existsSync(filePath)) return null;
@@ -142,7 +157,10 @@ function buildPrompt(input: ContainerInput): string {
   }
   const journalTail = readOptionalFileTail(journalPath, MAX_JOURNAL_TAIL_CHARS);
   if (journalTail) {
-    memorySections.push(`## Notes Journal Tail (${journalPath})\n${truncate(journalTail, MAX_JOURNAL_TAIL_CHARS)}`);
+    const redactedJournalTail = redactSensitive(journalTail);
+    if (redactedJournalTail.trim()) {
+      memorySections.push(`## Notes Journal Tail (${journalPath})\n${truncate(redactedJournalTail, MAX_JOURNAL_TAIL_CHARS)}`);
+    }
   }
 
   const memoryBlock = memorySections.length > 0

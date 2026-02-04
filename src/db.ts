@@ -210,6 +210,46 @@ export function getRecentMessages(chatJid: string, limit = 40): NewMessage[] {
   return rows.reverse();
 }
 
+function escapeSqlLike(term: string): string {
+  return term.replace(/[\\%_]/g, '\\$&');
+}
+
+/**
+ * Search message content for any of the provided terms.
+ * Intended for lightweight retrieval (RAG-ish) to improve long-running context.
+ */
+export function searchMessages(
+  chatJid: string,
+  terms: string[],
+  beforeTimestamp?: string,
+  limit = 8
+): NewMessage[] {
+  const filteredTerms = Array.from(new Set(terms.map(t => t.trim()).filter(Boolean))).slice(0, 8);
+  if (filteredTerms.length === 0) return [];
+
+  const likeClauses = filteredTerms.map(() => `content LIKE ? ESCAPE '\\'`).join(' OR ');
+  const likeParams = filteredTerms.map(t => `%${escapeSqlLike(t)}%`);
+
+  const values: unknown[] = [chatJid];
+  let sql = `
+    SELECT id, chat_jid, sender, sender_name, content, timestamp
+    FROM messages
+    WHERE chat_jid = ?
+  `;
+
+  if (beforeTimestamp) {
+    sql += ` AND timestamp < ?`;
+    values.push(beforeTimestamp);
+  }
+
+  sql += ` AND (${likeClauses})`;
+  sql += ` ORDER BY timestamp DESC LIMIT ?`;
+
+  values.push(...likeParams, limit);
+
+  return db.prepare(sql).all(...values) as NewMessage[];
+}
+
 export function createTask(task: Omit<ScheduledTask, 'last_run' | 'last_result'>): void {
   db.prepare(`
     INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at)

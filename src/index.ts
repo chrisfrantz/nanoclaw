@@ -15,7 +15,7 @@ import {
   TIMEZONE
 } from './config.js';
 import { RegisteredGroup, Session, NewMessage } from './types.js';
-import { initDatabase, storeMessage, storeChatMetadata, getNewMessages, getRecentMessages, getAllTasks, getAllChats } from './db.js';
+import { initDatabase, storeMessage, storeChatMetadata, getNewMessages, getRecentMessages, getAllTasks, getAllChats, searchMessages } from './db.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { runContainerAgent, writeTasksSnapshot, writeGroupsSnapshot, AvailableGroup } from './container-runner.js';
 import { loadJson, saveJson } from './utils.js';
@@ -43,10 +43,38 @@ let modelPrefs: Record<string, ModelPreference> = {};
 const DUPLICATE_WINDOW_MS = 5000;
 const recentOutgoing: Record<string, { text: string; timestamp: number }> = {};
 const JOURNAL_MAX_CHARS_PER_FIELD = 1200;
+const RETRIEVAL_LIMIT = 8;
+const RETRIEVAL_MAX_CHARS = 320;
 
 function getTelegramChatId(chatJid: string): string | null {
   if (!chatJid.startsWith('telegram:')) return null;
   return chatJid.slice('telegram:'.length);
+}
+
+function extractSearchTerms(text: string): string[] {
+  const cleaned = text
+    .toLowerCase()
+    .replace(/[`"'“”‘’]/g, ' ')
+    .replace(/[^a-z0-9_\n ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const stopwords = new Set([
+    'this', 'that', 'these', 'those', 'with', 'from', 'when', 'what', 'where', 'which', 'their', 'there',
+    'have', 'has', 'had', 'been', 'being', 'will', 'would', 'should', 'could', 'just', 'like', 'want',
+    'need', 'into', 'onto', 'over', 'under', 'then', 'than', 'also', 'here', 'your', 'youre', 'yours',
+    'about', 'please', 'thanks', 'thank', 'okay', 'ok', 'yeah', 'sure'
+  ]);
+
+  const terms: string[] = [];
+  for (const token of cleaned.split(' ')) {
+    if (token.length < 4) continue;
+    if (stopwords.has(token)) continue;
+    if (terms.includes(token)) continue;
+    terms.push(token);
+    if (terms.length >= 6) break;
+  }
+  return terms;
 }
 
 function redactSensitive(text: string): string {
@@ -226,6 +254,11 @@ async function processMessage(msg: NewMessage): Promise<void> {
 
   // Build a rolling window of recent messages for context
   const recentMessages = getRecentMessages(msg.chat_jid, 40);
+  const retrievalTerms = extractSearchTerms(strippedContent);
+  const beforeTimestamp = recentMessages.length > 0 ? recentMessages[0].timestamp : undefined;
+  const retrievedMessages = retrievalTerms.length > 0
+    ? searchMessages(msg.chat_jid, retrievalTerms, beforeTimestamp, RETRIEVAL_LIMIT)
+    : [];
 
   const lines = recentMessages.map(m => {
     // Escape XML special characters in content
@@ -236,7 +269,22 @@ async function processMessage(msg: NewMessage): Promise<void> {
       .replace(/"/g, '&quot;');
     return `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${escapeXml(m.content)}</message>`;
   });
-  const prompt = `<messages>\n${lines.join('\n')}\n</messages>`;
+
+  const retrievedLines = retrievedMessages.map(m => {
+    const escapeXml = (s: string) => s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+    const truncated = clampText(m.content, RETRIEVAL_MAX_CHARS).replace(/\n/g, ' ');
+    return `<hit sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${escapeXml(truncated)}</hit>`;
+  });
+
+  const retrievedBlock = retrievedLines.length > 0
+    ? `<retrieved terms="${retrievalTerms.join(', ')}">\n${retrievedLines.join('\n')}\n</retrieved>\n\n`
+    : '';
+
+  const prompt = `${retrievedBlock}<messages>\n${lines.join('\n')}\n</messages>`;
 
   if (!prompt) return;
 
