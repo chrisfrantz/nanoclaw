@@ -449,7 +449,8 @@ async function sendMessage(chatJid: string, text: string): Promise<string | null
   }
   try {
     const sent = await telegramBot.telegram.sendMessage(chatId, text);
-    const timestamp = new Date((sent.date || Math.floor(Date.now() / 1000)) * 1000).toISOString();
+    const baseSeconds = sent.date || Math.floor(Date.now() / 1000);
+    const timestamp = new Date(baseSeconds * 1000 + (sent.message_id % 1000)).toISOString();
     trackOutgoing(chatJid, text);
     storeMessage({
       id: `out-${chatId}-${sent.message_id}`,
@@ -742,7 +743,9 @@ async function startTelegramBot(): Promise<void> {
     }
 
     const senderName = ctx.from?.first_name || ctx.from?.username || 'User';
-    const timestamp = new Date(ctx.message.date * 1000).toISOString();
+    // Telegram message.date is seconds, so multiple messages can share the same timestamp.
+    // Add a stable millisecond tie-breaker from message_id to prevent missed messages when polling by timestamp.
+    const timestamp = new Date(ctx.message.date * 1000 + (ctx.message.message_id % 1000)).toISOString();
 
     storeMessage({
       id: `${chatId}:${ctx.message.message_id}`,
