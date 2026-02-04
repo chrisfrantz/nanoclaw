@@ -15,6 +15,7 @@ Date: 2026-02-04
   - `data/ssh/main/` mounted at `/home/node/.ssh`
   - docs in `docs/DEPLOY_KEYS.md`
 - added a host-side **single instance lock** to prevent telegram `409` conflicts / duplicate processing when two processes are started
+- hardened telegram polling ordering by adding a stable millisecond tie-breaker to message timestamps (prevents missing messages sent within the same second)
 - updated docs to match single-dm mode (`README.md`, `docs/SPEC.md`, `docs/SECURITY.md`, `docs/REQUIREMENTS.md`)
 
 ## key behavior (current)
