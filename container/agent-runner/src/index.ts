@@ -32,12 +32,10 @@ type ContextMode = 'group' | 'isolated';
 
 type Action =
   | { type: 'send_message'; text: string }
-  | { type: 'schedule_task'; prompt: string; schedule_type: ScheduleType; schedule_value: string; context_mode?: ContextMode; target_group?: string }
+  | { type: 'schedule_task'; prompt: string; schedule_type: ScheduleType; schedule_value: string; context_mode?: ContextMode }
   | { type: 'pause_task'; task_id: string }
   | { type: 'resume_task'; task_id: string }
-  | { type: 'cancel_task'; task_id: string }
-  | { type: 'register_group'; jid: string; name: string; folder: string; trigger: string }
-  | { type: 'refresh_groups' };
+  | { type: 'cancel_task'; task_id: string };
 
 interface AgentResponse {
   reply: string;
@@ -53,7 +51,9 @@ const NOTES_DIR = '/workspace/notes';
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
-const RESPONSE_SCHEMA_PATH = '/app/response-schema.json';
+const IMAGE_SCHEMA_PATH = '/app/response-schema.json';
+const HOST_SCHEMA_PATH = path.join(PROJECT_ROOT, 'container', 'agent-runner', 'response-schema.json');
+const RESPONSE_SCHEMA_PATH = fs.existsSync(HOST_SCHEMA_PATH) ? HOST_SCHEMA_PATH : IMAGE_SCHEMA_PATH;
 
 const MAX_MEMORY_CHARS = 12000;
 const MAX_JOURNAL_TAIL_CHARS = 6000;
@@ -134,22 +134,13 @@ function readOptionalFileTail(filePath: string, maxChars: number): string | null
 
 function buildPrompt(input: ContainerInput): string {
   const groupMemoryPath = path.join(GROUP_WORKDIR, 'MEMORY.md');
-  const globalMemoryPath = input.isMain
-    ? path.join(PROJECT_ROOT, 'groups', 'global', 'MEMORY.md')
-    : '/workspace/global/MEMORY.md';
-  const soulDocPath = input.isMain
-    ? path.join(PROJECT_ROOT, 'docs', 'SOUL.md')
-    : '/workspace/global/SOUL.md';
+  const soulDocPath = path.join(PROJECT_ROOT, 'docs', 'SOUL.md');
   const journalPath = path.join(NOTES_DIR, 'journal.md');
 
   const memorySections: string[] = [];
-  const globalMemory = readOptionalFile(globalMemoryPath);
-  if (globalMemory) {
-    memorySections.push(`## Global Memory (${globalMemoryPath})\n${truncate(globalMemory, MAX_MEMORY_CHARS)}`);
-  }
   const groupMemory = readOptionalFile(groupMemoryPath);
   if (groupMemory) {
-    memorySections.push(`## Group Memory (${groupMemoryPath})\n${truncate(groupMemory, MAX_MEMORY_CHARS)}`);
+    memorySections.push(`## Memory (${groupMemoryPath})\n${truncate(groupMemory, MAX_MEMORY_CHARS)}`);
   }
   const soulDoc = readOptionalFile(soulDocPath);
   if (soulDoc) {
@@ -184,29 +175,24 @@ function buildPrompt(input: ContainerInput): string {
     'Do not include any extra text outside JSON.',
     '',
     'Context:',
-    `- groupFolder: ${input.groupFolder}`,
+    `- workspaceFolder: ${input.groupFolder}`,
     `- chatJid: ${input.chatJid}`,
     `- isMain: ${input.isMain}`,
     `- workspace: ${GROUP_WORKDIR} (read/write)`,
     `- notesDir: ${NOTES_DIR} (persistent, local-only)`,
-    `- projectRoot (main only): ${PROJECT_ROOT}`,
+    `- projectRoot: ${PROJECT_ROOT}`,
     `- tasks snapshot: ${path.join(IPC_DIR, 'current_tasks.json')}`,
-    `- available groups snapshot (main only): ${path.join(IPC_DIR, 'available_groups.json')}`,
     '',
     'Memory rules:',
-    '- When the user says "remember this", update the group memory file.',
-    '- When the user says "remember this globally" (main only), update the global memory file.',
+    '- When the user says "remember this", update the memory file.',
     '- Use the notes directory for local-only running logs and scratch work (e.g. append to /workspace/notes/journal.md).',
     '',
     'Actions:',
     '- send_message: send a message to the current chat.',
-    '- schedule_task: create a scheduled task (cron/interval/once). Use local time for "once" (no Z suffix). Include context_mode ("group" or "isolated") and target_group (null unless main is scheduling for another group).',
+    '- schedule_task: create a scheduled task (cron/interval/once). Use local time for "once" (no Z suffix). Include context_mode ("group" for continuous context, or "isolated" for a clean run).',
     '- pause_task / resume_task / cancel_task: manage tasks by id.',
-    '- register_group (main only): register a new Telegram chat using a JID from available_groups.json.',
-    '- refresh_groups (main only): refresh available_groups.json snapshot.',
     '',
     'Constraints:',
-    '- Non-main groups cannot target other groups.',
     '- Do not expose secrets in replies.',
     memoryBlock,
     '',
@@ -294,19 +280,13 @@ function processActions(actions: Action[], input: ContainerInput): string[] {
           warnings.push(validationError);
           break;
         }
-        const targetGroup = (input.isMain && action.target_group)
-          ? action.target_group
-          : input.groupFolder;
-
         const data = {
           type: 'schedule_task',
           prompt,
           schedule_type,
           schedule_value,
           context_mode: action.context_mode === 'isolated' ? 'isolated' : 'group',
-          groupFolder: targetGroup,
           chatJid: input.chatJid,
-          createdBy: input.groupFolder,
           timestamp: new Date().toISOString()
         };
 
@@ -329,38 +309,6 @@ function processActions(actions: Action[], input: ContainerInput): string[] {
           timestamp: new Date().toISOString()
         };
         writeIpcFile(TASKS_DIR, data);
-        break;
-      }
-      case 'register_group': {
-        if (!input.isMain) {
-          warnings.push('register_group is only allowed from the main group.');
-          break;
-        }
-        const { jid, name, folder, trigger } = action;
-        if (!jid || !name || !folder || !trigger) {
-          warnings.push('register_group missing required fields.');
-          break;
-        }
-        const data = {
-          type: 'register_group',
-          jid,
-          name,
-          folder,
-          trigger,
-          timestamp: new Date().toISOString()
-        };
-        writeIpcFile(TASKS_DIR, data);
-        break;
-      }
-      case 'refresh_groups': {
-        if (!input.isMain) {
-          warnings.push('refresh_groups is only allowed from the main group.');
-          break;
-        }
-        writeIpcFile(TASKS_DIR, {
-          type: 'refresh_groups',
-          timestamp: new Date().toISOString()
-        });
         break;
       }
       default:
@@ -456,7 +404,7 @@ async function main(): Promise<void> {
   try {
     const stdinData = await readStdin();
     input = JSON.parse(stdinData);
-    log(`Received input for group: ${input.groupFolder}`);
+    log(`Received input for workspace: ${input.groupFolder}`);
   } catch (err) {
     writeOutput({
       status: 'error',

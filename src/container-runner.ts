@@ -114,21 +114,21 @@ function buildVolumeMounts(
   }
 
   if (isMain) {
-    // Main gets the entire project root mounted
+    // Single owner workspace gets the entire project root mounted
     mounts.push({
       hostPath: projectRoot,
       containerPath: '/workspace/project',
       readonly: false
     });
 
-    // Main also gets its group folder as the working directory
+    // It also gets its workspace folder as the working directory
     mounts.push({
       hostPath: path.join(GROUPS_DIR, group.folder),
       containerPath: '/workspace/group',
       readonly: false
     });
   } else {
-    // Other groups only get their own folder
+    // Legacy multi-workspace support (currently unused)
     mounts.push({
       hostPath: path.join(GROUPS_DIR, group.folder),
       containerPath: '/workspace/group',
@@ -499,35 +499,4 @@ export function writeTasksSnapshot(
 
   const tasksFile = path.join(groupIpcDir, 'current_tasks.json');
   fs.writeFileSync(tasksFile, JSON.stringify(filteredTasks, null, 2));
-}
-
-export interface AvailableGroup {
-  jid: string;
-  name: string;
-  lastActivity: string;
-  isRegistered: boolean;
-}
-
-/**
- * Write available groups snapshot for the container to read.
- * Only main group can see all available groups (for activation).
- * Non-main groups only see their own registration status.
- */
-export function writeGroupsSnapshot(
-  groupFolder: string,
-  isMain: boolean,
-  groups: AvailableGroup[],
-  registeredJids: Set<string>
-): void {
-  const groupIpcDir = path.join(DATA_DIR, 'ipc', groupFolder);
-  fs.mkdirSync(groupIpcDir, { recursive: true });
-
-  // Main sees all groups; others see nothing (they can't activate groups)
-  const visibleGroups = isMain ? groups : [];
-
-  const groupsFile = path.join(groupIpcDir, 'available_groups.json');
-  fs.writeFileSync(groupsFile, JSON.stringify({
-    groups: visibleGroups,
-    lastSync: new Date().toISOString()
-  }, null, 2));
 }

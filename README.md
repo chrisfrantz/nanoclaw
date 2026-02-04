@@ -15,7 +15,7 @@ NanoClaw gives you the same core functionality in a codebase you can understand 
 ## Quick Start
 
 ```bash
-git clone https://github.com/gavrielc/nanoclaw.git
+git clone https://github.com/chrisfrantz/nanoclaw.git
 cd nanoclaw
 codex
 ```
@@ -43,28 +43,30 @@ Then run `/setup`. Codex CLI handles everything: dependencies, authentication, c
 ## What It Supports
 
 - **Telegram I/O** - Message Codex from your phone or desktop
-- **Isolated group context** - Each group has its own `MEMORY.md` memory, isolated filesystem, and runs in its own container sandbox with only that filesystem mounted
-- **Main channel** - Your private channel (self-chat) for admin control; every other group is completely isolated
+- **Single-owner DM** - Locked to one Telegram user id (no groups)
+- **Persistent memory** - `groups/main/MEMORY.md` + injected `docs/SOUL.md`
+- **Local-only notes** - Persistent, gitignored notes at `data/notes/main/` (mounted at `/workspace/notes`)
 - **Scheduled tasks** - Recurring jobs that run Codex and can message you back
-- **Web access** - Use shell tools (curl/wget) and agent-browser inside the container
+- **Web + browser automation** - shell tools + `agent-browser` inside the container
 - **Container isolation** - Agents sandboxed in Apple Container (macOS) or Docker (macOS/Linux)
-- **Optional integrations** - Add Gmail (`/add-gmail`) and more via skills
+- **Deploy keys** - Persistent SSH keys at `data/ssh/main/` (mounted at `/home/node/.ssh`)
 
 ## Usage
 
-Talk to your assistant with the trigger word (default: `@Andy`):
+Just message your assistant (no trigger required; `@Andy` is optional and stripped if present):
 
 ```
-@Andy send an overview of the sales pipeline every weekday morning at 9am (has access to my Obsidian vault folder)
-@Andy review the git history for the past week each Friday and update the README if there's drift
-@Andy every Monday at 8am, compile news on AI developments from Hacker News and TechCrunch and message me a briefing
+send an overview of the sales pipeline every weekday morning at 9am
+review the git history for the past week each Friday and update the README if there's drift
+every Monday at 8am, compile news on ai developments and message me a briefing
 ```
 
-From the main channel (your self-chat), you can manage groups and tasks:
+Model control:
 ```
-@Andy list all scheduled tasks across groups
-@Andy pause the Monday briefing task
-@Andy join the Family Chat group
+model status
+model auto
+model code
+model gpt-5.2-codex high
 ```
 
 ## Customizing
@@ -123,9 +125,10 @@ Key files:
 - `src/container-runner.ts` - Spawns agent containers
 - `src/task-scheduler.ts` - Runs scheduled tasks
 - `src/db.ts` - SQLite operations
-- `groups/*/MEMORY.md` - Per-group memory
+- `groups/main/MEMORY.md` - Long-term memory (single DM)
 - `docs/SOUL.md` - Agent voice and response guidelines
 - `docs/DEPLOY_KEYS.md` - Persistent SSH deploy keys
+- `container/shell.sh` - Drop into the agent container (debug)
 
 ## FAQ
 

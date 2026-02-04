@@ -1,121 +1,70 @@
 # NanoClaw Security Model
 
+NanoClaw is intentionally narrow: **one Telegram owner DM**, one workspace, one host process, and ephemeral container execution.
+
 ## Trust Model
 
-| Entity | Trust Level | Rationale |
-|--------|-------------|-----------|
-| Main group | Trusted | Private self-chat, admin control |
-| Non-main groups | Untrusted | Other users may be malicious |
-| Container agents | Sandboxed | Isolated execution environment |
-| Telegram messages | User input | Potential prompt injection |
+| Entity | Trust level | Notes |
+|--------|-------------|-------|
+| Owner Telegram DM | trusted | only one Telegram user id is accepted |
+| Telegram messages | untrusted input | prompt injection is always possible |
+| Host process | trusted | runs on your Mac, controls mounts + routing |
+| Container agent | sandboxed | runs as non-root `node` inside Apple Container |
 
-## Security Boundaries
+## Primary Security Boundaries
 
-### 1. Container Isolation (Primary Boundary)
+### 1) Owner lock (input boundary)
 
-Agents execute in Apple Container (lightweight Linux VMs), providing:
-- **Process isolation** - Container processes cannot affect the host
-- **Filesystem isolation** - Only explicitly mounted directories are visible
-- **Non-root execution** - Runs as unprivileged `node` user (uid 1000)
-- **Ephemeral containers** - Fresh environment per invocation (`--rm`)
+NanoClaw ignores everything except:
+- `chat.type === "private"`
+- `from.id === TELEGRAM_OWNER_ID` (or a single-id `TELEGRAM_ALLOWED_USER_IDS`)
 
-This is the primary security boundary. Rather than relying on application-level permission checks, the attack surface is limited by what's mounted.
+This prevents other Telegram users (and group chats) from triggering the agent.
 
-### 2. Mount Security
+### 2) Ephemeral containers (execution boundary)
 
-**External Allowlist** - Mount permissions stored at `~/.config/nanoclaw/mount-allowlist.json`, which is:
-- Outside project root
-- Never mounted into containers
-- Cannot be modified by agents
+Each agent run executes in an ephemeral Apple Container VM (`--rm`):
+- clean process tree each run
+- clean container root filesystem each run
+- only mounted directories persist
 
-**Default Blocked Patterns:**
-```
-.ssh, .gnupg, .aws, .azure, .gcloud, .kube, .docker,
-credentials, .env, .netrc, .npmrc, id_rsa, id_ed25519,
-private_key, .secret
-```
+### 3) Explicit mounts only (data boundary)
 
-**Protections:**
-- Symlink resolution before validation (prevents traversal attacks)
-- Container path validation (rejects `..` and absolute paths)
-- `nonMainReadOnly` option forces read-only for non-main groups
+The container can only see what NanoClaw mounts. In the default setup, that includes:
+- `groups/main/` → `/workspace/group` (rw)
+- `data/notes/main/` → `/workspace/notes` (rw, local-only)
+- `data/sessions/main/.codex/` → `/home/node/.codex` (rw, Codex auth/session state)
+- `data/ssh/main/` → `/home/node/.ssh` (rw, deploy keys)
+- `data/ipc/main/` → `/workspace/ipc` (rw, actions)
+- project root → `/workspace/project` (rw, to let the agent inspect/patch NanoClaw itself)
+- `container/agent-runner/dist/` → `/app/dist` (ro, so the container uses the latest runner build when present)
 
-### 3. Session Isolation
+### 4) Mount allowlist (optional expansion boundary)
 
-Each group has isolated Codex sessions at `data/sessions/{group}/.codex/`:
-- Groups cannot see other groups' conversation history
-- Session data includes full message history and file contents read
-- Prevents cross-group information disclosure
+If you enable additional mounts, NanoClaw validates them against an external allowlist at:
+- `~/.config/nanoclaw/mount-allowlist.json`
 
-### 4. IPC Authorization
+That file is never mounted into containers, so the agent can’t weaken the allowlist from inside the sandbox.
 
-Messages and task operations are verified against group identity:
+## Credentials
 
-| Operation | Main Group | Non-Main Group |
-|-----------|------------|----------------|
-| Send message to own chat | ✓ | ✓ |
-| Send message to other chats | ✓ | ✗ |
-| Schedule task for self | ✓ | ✓ |
-| Schedule task for others | ✓ | ✗ |
-| View all tasks | ✓ | Own only |
-| Manage other groups | ✓ | ✗ |
+What *is* available to the agent (because it must be for work to happen):
+- Codex OAuth credentials seeded into `/home/node/.codex` (from the host’s `~/.codex`)
+- repo-scoped SSH deploy keys under `/home/node/.ssh`
 
-### 5. Credential Handling
+What is *not* mounted:
+- Telegram bot token in `.env` (host-only)
+- host `~/.ssh` (use deploy keys under `data/ssh/main/`)
 
-**Mounted Credentials:**
-- Codex API key (filtered from `.env`, read-only)
-- Main-only SSH deploy keys: `data/ssh/main/` (mounted to `/home/node/.ssh`)
+## Data Persistence
 
-**NOT Mounted:**
-- Telegram bot token in `.env` - host only
-- Mount allowlist - external, never mounted
-- Host `~/.ssh` - not mounted (use repo-scoped deploy keys under `data/ssh/main/`)
-- Any credentials matching blocked patterns
+Durable + safe-ish for agents:
+- `data/notes/main/` for running logs and scratchpads (gitignored)
 
-**Credential Filtering:**
-Only these environment variables are exposed to containers:
-```typescript
-const allowedVars = ['CODEX_API_KEY'];
-```
+Durable + tracked (you should review):
+- `groups/main/MEMORY.md` (long-term memory)
 
-> **Note:** Codex credentials are mounted so the CLI can authenticate when the agent runs. This means the agent itself can discover these credentials via Bash or file operations. Ideally, Codex would authenticate without exposing credentials to the agent's execution environment. **PRs welcome** if you have ideas for credential isolation.
+## Common Footguns
 
-## Privilege Comparison
-
-| Capability | Main Group | Non-Main Group |
-|------------|------------|----------------|
-| Project root access | `/workspace/project` (rw) | None |
-| Group folder | `/workspace/group` (rw) | `/workspace/group` (rw) |
-| Global memory | Implicit via project | `/workspace/global` (ro) |
-| Additional mounts | Configurable | Read-only unless allowed |
-| Network access | Unrestricted | Unrestricted |
-| IPC actions | All | All |
-
-## Security Architecture Diagram
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                        UNTRUSTED ZONE                             │
-│  Telegram Messages (potentially malicious)                        │
-└────────────────────────────────┬─────────────────────────────────┘
-                                 │
-                                 ▼ Trigger check, input escaping
-┌──────────────────────────────────────────────────────────────────┐
-│                     HOST PROCESS (TRUSTED)                        │
-│  • Message routing                                                │
-│  • IPC authorization                                              │
-│  • Mount validation (external allowlist)                          │
-│  • Container lifecycle                                            │
-│  • Credential filtering                                           │
-└────────────────────────────────┬─────────────────────────────────┘
-                                 │
-                                 ▼ Explicit mounts only
-┌──────────────────────────────────────────────────────────────────┐
-│                CONTAINER (ISOLATED/SANDBOXED)                     │
-│  • Agent execution                                                │
-│  • Bash commands (sandboxed)                                      │
-│  • File operations (limited to mounts)                            │
-│  • Network access (unrestricted)                                  │
-│  • Cannot modify security config                                  │
-└──────────────────────────────────────────────────────────────────┘
-```
+- Telegram `409 Conflict: terminated by other getUpdates request` means **two bot instances** are polling (e.g., launchd + `npm run dev`). Run only one.
+- Anything written inside the container outside mounted paths disappears after the run.

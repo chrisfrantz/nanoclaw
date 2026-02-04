@@ -9,15 +9,21 @@ import {
   ASSISTANT_NAME,
   POLL_INTERVAL,
   DATA_DIR,
-  TRIGGER_PATTERN,
   MAIN_GROUP_FOLDER,
   IPC_POLL_INTERVAL,
   TIMEZONE
 } from './config.js';
 import { RegisteredGroup, Session, NewMessage } from './types.js';
-import { initDatabase, storeMessage, storeChatMetadata, getNewMessages, getRecentMessages, getAllTasks, getAllChats, searchMessages } from './db.js';
+import {
+  initDatabase,
+  storeMessage,
+  getNewMessages,
+  getRecentMessages,
+  getAllTasks,
+  searchMessages
+} from './db.js';
 import { startSchedulerLoop } from './task-scheduler.js';
-import { runContainerAgent, writeTasksSnapshot, writeGroupsSnapshot, AvailableGroup } from './container-runner.js';
+import { runContainerAgent, writeTasksSnapshot } from './container-runner.js';
 import { loadJson, saveJson } from './utils.js';
 import {
   loadModelPrefs,
@@ -34,21 +40,136 @@ const logger = pino({
   transport: { target: 'pino-pretty', options: { colorize: true } }
 });
 
+const MAIN_GROUP: RegisteredGroup = {
+  name: 'main',
+  folder: MAIN_GROUP_FOLDER,
+  trigger: `@${ASSISTANT_NAME}`,
+  added_at: new Date().toISOString()
+};
+
 let telegramBot: Telegraf;
 let lastTimestamp = '';
 let sessions: Session = {};
-let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let modelPrefs: Record<string, ModelPreference> = {};
+
+let ownerId = '';
+let ownerChatJid = '';
+let shuttingDown = false;
+
 const DUPLICATE_WINDOW_MS = 5000;
 const recentOutgoing: Record<string, { text: string; timestamp: number }> = {};
 const JOURNAL_MAX_CHARS_PER_FIELD = 1200;
 const RETRIEVAL_LIMIT = 8;
 const RETRIEVAL_MAX_CHARS = 320;
 
+function isPidRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === 'EPERM';
+  }
+}
+
+function acquireSingleInstanceLock(lockPath: string): () => void {
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = fs.openSync(lockPath, 'wx');
+      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, started_at: new Date().toISOString() }) + '\n');
+      fs.closeSync(fd);
+
+      const release = () => {
+        try {
+          const raw = fs.readFileSync(lockPath, 'utf-8');
+          const parsed = JSON.parse(raw) as { pid?: unknown };
+          if (Number(parsed.pid) !== process.pid) return;
+        } catch {
+          // best effort
+        }
+        try {
+          fs.unlinkSync(lockPath);
+        } catch {
+        }
+      };
+
+      process.once('exit', release);
+      return release;
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (e.code !== 'EEXIST') throw err;
+
+      let existingPid: number | null = null;
+      try {
+        const raw = fs.readFileSync(lockPath, 'utf-8');
+        const parsed = JSON.parse(raw) as { pid?: unknown };
+        const pid = Number(parsed.pid);
+        existingPid = Number.isFinite(pid) ? pid : null;
+      } catch {
+        existingPid = null;
+      }
+
+      if (existingPid && isPidRunning(existingPid)) {
+        throw new Error(`Another NanoClaw instance is already running (pid ${existingPid}). Stop it before starting a new one.`);
+      }
+
+      try {
+        fs.unlinkSync(lockPath);
+      } catch {
+      }
+    }
+  }
+
+  throw new Error('Failed to acquire single-instance lock.');
+}
+
+function parseEnvList(value?: string): Set<string> {
+  if (!value) return new Set();
+  return new Set(
+    value
+      .split(',')
+      .map(item => item.trim())
+      .filter(Boolean)
+  );
+}
+
+function loadOwnerId(): string {
+  const direct = String(process.env.TELEGRAM_OWNER_ID || '').trim();
+  if (direct) return direct;
+
+  const allowed = parseEnvList(process.env.TELEGRAM_ALLOWED_USER_IDS);
+  if (allowed.size === 1) return Array.from(allowed)[0];
+
+  throw new Error('Set TELEGRAM_OWNER_ID or TELEGRAM_ALLOWED_USER_IDS (single id) to lock NanoClaw to your Telegram account.');
+}
+
 function getTelegramChatId(chatJid: string): string | null {
   if (!chatJid.startsWith('telegram:')) return null;
   return chatJid.slice('telegram:'.length);
+}
+
+async function setTyping(chatJid: string, isTyping: boolean): Promise<void> {
+  if (!isTyping) return;
+  const chatId = getTelegramChatId(chatJid);
+  if (!chatId) return;
+  try {
+    await telegramBot.telegram.sendChatAction(chatId, 'typing');
+  } catch (err) {
+    logger.debug({ chatJid, err }, 'Failed to update typing status');
+  }
+}
+
+function isDuplicateOutgoing(chatJid: string, text: string): boolean {
+  const last = recentOutgoing[chatJid];
+  if (!last) return false;
+  if (Date.now() - last.timestamp > DUPLICATE_WINDOW_MS) return false;
+  return last.text === text;
+}
+
+function trackOutgoing(chatJid: string, text: string): void {
+  recentOutgoing[chatJid] = { text, timestamp: Date.now() };
 }
 
 function extractSearchTerms(text: string): string[] {
@@ -130,28 +251,6 @@ function appendJournalEntry(params: {
   }
 }
 
-async function setTyping(chatJid: string, isTyping: boolean): Promise<void> {
-  if (!isTyping) return;
-  const chatId = getTelegramChatId(chatJid);
-  if (!chatId) return;
-  try {
-    await telegramBot.telegram.sendChatAction(chatId, 'typing');
-  } catch (err) {
-    logger.debug({ chatJid, err }, 'Failed to update typing status');
-  }
-}
-
-function isDuplicateOutgoing(chatJid: string, text: string): boolean {
-  const last = recentOutgoing[chatJid];
-  if (!last) return false;
-  if (Date.now() - last.timestamp > DUPLICATE_WINDOW_MS) return false;
-  return last.text === text;
-}
-
-function trackOutgoing(chatJid: string, text: string): void {
-  recentOutgoing[chatJid] = { text, timestamp: Date.now() };
-}
-
 function shouldAutoReview(content: string): boolean {
   const lowered = content.toLowerCase();
   const keywords = [
@@ -199,9 +298,8 @@ function loadState(): void {
   lastTimestamp = state.last_timestamp || '';
   lastAgentTimestamp = state.last_agent_timestamp || {};
   sessions = loadJson(path.join(DATA_DIR, 'sessions.json'), {});
-  registeredGroups = loadJson(path.join(DATA_DIR, 'registered_groups.json'), {});
   modelPrefs = loadModelPrefs();
-  logger.info({ groupCount: Object.keys(registeredGroups).length }, 'State loaded');
+  logger.info('State loaded');
 }
 
 function saveState(): void {
@@ -209,50 +307,14 @@ function saveState(): void {
   saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
 }
 
-function registerGroup(jid: string, group: RegisteredGroup): void {
-  registeredGroups[jid] = group;
-  saveJson(path.join(DATA_DIR, 'registered_groups.json'), registeredGroups);
-
-  // Create group folder
-  const groupDir = path.join(DATA_DIR, '..', 'groups', group.folder);
-  fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
-
-  logger.info({ jid, name: group.name, folder: group.folder }, 'Group registered');
-}
-
-/**
- * Get available groups list for the agent.
- * Returns groups ordered by most recent activity.
- */
-function getAvailableGroups(): AvailableGroup[] {
-  const chats = getAllChats();
-  const registeredJids = new Set(Object.keys(registeredGroups));
-
-  return chats
-    .filter(c => c.jid !== '__group_sync__')
-    .map(c => ({
-      jid: c.jid,
-      name: c.name,
-      lastActivity: c.last_message_time,
-      isRegistered: registeredJids.has(c.jid)
-    }));
-}
-
 async function processMessage(msg: NewMessage): Promise<void> {
-  const group = registeredGroups[msg.chat_jid];
-  if (!group) return;
+  if (msg.chat_jid !== ownerChatJid) return;
 
   const content = msg.content.trim();
-  const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
-
-  // Main group responds to all messages; other groups require trigger prefix
-  if (!isMainGroup && !TRIGGER_PATTERN.test(content)) return;
-
   const strippedContent = stripTrigger(content);
   const modelCommandHandled = await handleModelCommand(msg.chat_jid, strippedContent, msg.timestamp);
   if (modelCommandHandled) return;
 
-  // Build a rolling window of recent messages for context
   const recentMessages = getRecentMessages(msg.chat_jid, 40);
   const retrievalTerms = extractSearchTerms(strippedContent);
   const beforeTimestamp = recentMessages.length > 0 ? recentMessages[0].timestamp : undefined;
@@ -260,22 +322,17 @@ async function processMessage(msg: NewMessage): Promise<void> {
     ? searchMessages(msg.chat_jid, retrievalTerms, beforeTimestamp, RETRIEVAL_LIMIT)
     : [];
 
-  const lines = recentMessages.map(m => {
-    // Escape XML special characters in content
-    const escapeXml = (s: string) => s
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-    return `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${escapeXml(m.content)}</message>`;
-  });
+  const escapeXml = (s: string) => s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+  const lines = recentMessages.map(m => (
+    `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${escapeXml(m.content)}</message>`
+  ));
 
   const retrievedLines = retrievedMessages.map(m => {
-    const escapeXml = (s: string) => s
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
     const truncated = clampText(m.content, RETRIEVAL_MAX_CHARS).replace(/\n/g, ' ');
     return `<hit sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${escapeXml(truncated)}</hit>`;
   });
@@ -285,71 +342,64 @@ async function processMessage(msg: NewMessage): Promise<void> {
     : '';
 
   const prompt = `${retrievedBlock}<messages>\n${lines.join('\n')}\n</messages>`;
-
   if (!prompt) return;
 
-  logger.info({ group: group.name, messageCount: recentMessages.length }, 'Processing message');
+  logger.info({ messageCount: recentMessages.length }, 'Processing message');
 
   await setTyping(msg.chat_jid, true);
   const modelSelection = resolveModelSelection(strippedContent, msg.chat_jid, modelPrefs);
-  const response = await runAgent(group, prompt, msg.chat_jid, modelSelection);
+  const response = await runAgent(prompt, msg.chat_jid, modelSelection);
   await setTyping(msg.chat_jid, false);
 
-  if (response) {
-    const sentAt = await sendMessage(msg.chat_jid, response);
-    if (sentAt) {
-      lastAgentTimestamp[msg.chat_jid] = sentAt;
-    } else {
-      lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
-    }
+  if (!response) return;
 
-    appendJournalEntry({
-      groupFolder: group.folder,
-      chatJid: msg.chat_jid,
-      userText: strippedContent,
-      replyText: response,
-      model: modelSelection.model,
-      reasoningEffort: modelSelection.reasoningEffort,
-      timestamp: sentAt || msg.timestamp
-    });
+  const sentAt = await sendMessage(msg.chat_jid, response);
+  lastAgentTimestamp[msg.chat_jid] = sentAt || msg.timestamp;
 
-    const shouldReview = isMainGroup && shouldAutoReview(strippedContent);
-    logger.info({ shouldReview, chatJid: msg.chat_jid }, 'Review check');
-    if (shouldReview) {
-      const reviewPrompt = buildReviewPrompt(strippedContent, response);
-      const reviewModel = { model: 'gpt-5.2-codex', reasoningEffort: 'high' as const };
-      const reviewResponse = await runAgent(
-        group,
-        reviewPrompt,
-        msg.chat_jid,
-        reviewModel,
-        { sessionScope: 'review', trackSession: false }
-      );
-      if (reviewResponse) {
-        const reviewText = reviewResponse.trim();
-        const message = reviewText.toLowerCase().startsWith('review')
-          ? reviewText
-          : `review\n${reviewText}`;
-        await sendMessage(msg.chat_jid, message);
-      }
-    }
-  }
+  appendJournalEntry({
+    groupFolder: MAIN_GROUP.folder,
+    chatJid: msg.chat_jid,
+    userText: strippedContent,
+    replyText: response,
+    model: modelSelection.model,
+    reasoningEffort: modelSelection.reasoningEffort,
+    timestamp: sentAt || msg.timestamp
+  });
+
+  const shouldReview = shouldAutoReview(strippedContent);
+  if (!shouldReview) return;
+
+  const reviewPrompt = buildReviewPrompt(strippedContent, response);
+  const reviewModel = { model: 'gpt-5.2-codex', reasoningEffort: 'high' as const };
+  const reviewResponse = await runAgent(
+    reviewPrompt,
+    msg.chat_jid,
+    reviewModel,
+    { sessionScope: 'review', trackSession: false }
+  );
+
+  if (!reviewResponse) return;
+  const reviewText = reviewResponse.trim();
+  if (!reviewText) return;
+  const normalized = reviewText.toLowerCase();
+  if (normalized.startsWith('no issues found')) return;
+  const message = reviewText.toLowerCase().startsWith('review')
+    ? reviewText
+    : `review\n${reviewText}`;
+  await sendMessage(msg.chat_jid, message);
 }
 
 async function runAgent(
-  group: RegisteredGroup,
   prompt: string,
   chatJid: string,
   modelSelection: { model: string; reasoningEffort?: 'low' | 'medium' | 'high' },
   options?: { sessionScope?: 'main' | 'review'; trackSession?: boolean }
 ): Promise<string | null> {
-  const isMain = group.folder === MAIN_GROUP_FOLDER;
   const trackSession = options?.trackSession ?? true;
-  const sessionId = trackSession ? sessions[group.folder] : undefined;
+  const sessionId = trackSession ? sessions[MAIN_GROUP.folder] : undefined;
 
-  // Update tasks snapshot for container to read (filtered by group)
-  const tasks = getAllTasks();
-  writeTasksSnapshot(group.folder, isMain, tasks.map(t => ({
+  const tasks = getAllTasks().filter(t => t.group_folder === MAIN_GROUP.folder);
+  writeTasksSnapshot(MAIN_GROUP.folder, true, tasks.map(t => ({
     id: t.id,
     groupFolder: t.group_folder,
     prompt: t.prompt,
@@ -359,29 +409,25 @@ async function runAgent(
     next_run: t.next_run
   })));
 
-  // Update available groups snapshot (main group only can see all groups)
-  const availableGroups = getAvailableGroups();
-  writeGroupsSnapshot(group.folder, isMain, availableGroups, new Set(Object.keys(registeredGroups)));
-
   try {
-    const output = await runContainerAgent(group, {
+    const output = await runContainerAgent(MAIN_GROUP, {
       prompt,
       sessionId,
-      groupFolder: group.folder,
+      groupFolder: MAIN_GROUP.folder,
       chatJid,
-      isMain,
+      isMain: true,
       sessionScope: options?.sessionScope,
       model: modelSelection.model,
       reasoningEffort: modelSelection.reasoningEffort
     });
 
     if (trackSession && output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
+      sessions[MAIN_GROUP.folder] = output.newSessionId;
       saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
     }
 
     if (output.status === 'error') {
-      logger.error({ group: group.name, error: output.error }, 'Container agent error');
+      logger.error({ error: output.error }, 'Container agent error');
       if (output.error && output.error.toLowerCase().includes('timed out')) {
         return 'timed out running codex. try again or narrow the request.';
       }
@@ -390,7 +436,7 @@ async function runAgent(
 
     return output.result;
   } catch (err) {
-    logger.error({ group: group.name, err }, 'Agent error');
+    logger.error({ err }, 'Agent error');
     return null;
   }
 }
@@ -516,281 +562,156 @@ async function handleModelCommand(chatJid: string, content: string, timestamp: s
 }
 
 function startIpcWatcher(): void {
-  const ipcBaseDir = path.join(DATA_DIR, 'ipc');
-  fs.mkdirSync(ipcBaseDir, { recursive: true });
+  const groupIpcDir = path.join(DATA_DIR, 'ipc', MAIN_GROUP.folder);
+  const messagesDir = path.join(groupIpcDir, 'messages');
+  const tasksDir = path.join(groupIpcDir, 'tasks');
+  fs.mkdirSync(messagesDir, { recursive: true });
+  fs.mkdirSync(tasksDir, { recursive: true });
 
   const processIpcFiles = async () => {
-    // Scan all group IPC directories (identity determined by directory)
-    let groupFolders: string[];
     try {
-      groupFolders = fs.readdirSync(ipcBaseDir).filter(f => {
-        const stat = fs.statSync(path.join(ipcBaseDir, f));
-        return stat.isDirectory() && f !== 'errors';
-      });
-    } catch (err) {
-      logger.error({ err }, 'Error reading IPC base directory');
-      setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
-      return;
-    }
-
-    for (const sourceGroup of groupFolders) {
-      const isMain = sourceGroup === MAIN_GROUP_FOLDER;
-      const messagesDir = path.join(ipcBaseDir, sourceGroup, 'messages');
-      const tasksDir = path.join(ipcBaseDir, sourceGroup, 'tasks');
-
-      // Process messages from this group's IPC directory
-      try {
-        if (fs.existsSync(messagesDir)) {
-          const messageFiles = fs.readdirSync(messagesDir).filter(f => f.endsWith('.json'));
-          for (const file of messageFiles) {
-            const filePath = path.join(messagesDir, file);
-            try {
-              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              if (data.type === 'message' && data.chatJid && data.text) {
-                // Authorization: verify this group can send to this chatJid
-                const targetGroup = registeredGroups[data.chatJid];
-                if (isMain || (targetGroup && targetGroup.folder === sourceGroup)) {
-                  const text = data.text.trim();
-                  if (isDuplicateOutgoing(data.chatJid, text)) {
-                    logger.info({ chatJid: data.chatJid, sourceGroup }, 'Duplicate IPC message suppressed');
-                  } else {
-                    await sendMessage(data.chatJid, text);
-                    logger.info({ chatJid: data.chatJid, sourceGroup }, 'IPC message sent');
-                  }
+      const messageFiles = fs.readdirSync(messagesDir).filter(f => f.endsWith('.json'));
+      for (const file of messageFiles) {
+        const filePath = path.join(messagesDir, file);
+        try {
+          const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+          if (data.type === 'message' && data.chatJid && data.text) {
+            const target = String(data.chatJid);
+            if (target !== ownerChatJid) {
+              logger.warn({ target }, 'IPC message to non-owner chat blocked');
+            } else {
+              const text = String(data.text).trim();
+              if (text) {
+                if (isDuplicateOutgoing(ownerChatJid, text)) {
+                  logger.info('Duplicate IPC message suppressed');
                 } else {
-                  logger.warn({ chatJid: data.chatJid, sourceGroup }, 'Unauthorized IPC message attempt blocked');
+                  await sendMessage(ownerChatJid, text);
+                  logger.info('IPC message sent');
                 }
               }
-              fs.unlinkSync(filePath);
-            } catch (err) {
-              logger.error({ file, sourceGroup, err }, 'Error processing IPC message');
-              const errorDir = path.join(ipcBaseDir, 'errors');
-              fs.mkdirSync(errorDir, { recursive: true });
-              fs.renameSync(filePath, path.join(errorDir, `${sourceGroup}-${file}`));
             }
           }
+          fs.unlinkSync(filePath);
+        } catch (err) {
+          logger.error({ file, err }, 'Error processing IPC message');
         }
-      } catch (err) {
-        logger.error({ err, sourceGroup }, 'Error reading IPC messages directory');
       }
+    } catch (err) {
+      logger.error({ err }, 'Error reading IPC messages directory');
+    }
 
-      // Process tasks from this group's IPC directory
-      try {
-        if (fs.existsSync(tasksDir)) {
-          const taskFiles = fs.readdirSync(tasksDir).filter(f => f.endsWith('.json'));
-          for (const file of taskFiles) {
-            const filePath = path.join(tasksDir, file);
-            try {
-              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              // Pass source group identity to processTaskIpc for authorization
-              await processTaskIpc(data, sourceGroup, isMain);
-              fs.unlinkSync(filePath);
-            } catch (err) {
-              logger.error({ file, sourceGroup, err }, 'Error processing IPC task');
-              const errorDir = path.join(ipcBaseDir, 'errors');
-              fs.mkdirSync(errorDir, { recursive: true });
-              fs.renameSync(filePath, path.join(errorDir, `${sourceGroup}-${file}`));
-            }
-          }
+    try {
+      const taskFiles = fs.readdirSync(tasksDir).filter(f => f.endsWith('.json'));
+      for (const file of taskFiles) {
+        const filePath = path.join(tasksDir, file);
+        try {
+          const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+          await processTaskIpc(data);
+          fs.unlinkSync(filePath);
+        } catch (err) {
+          logger.error({ file, err }, 'Error processing IPC task');
         }
-      } catch (err) {
-        logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
       }
+    } catch (err) {
+      logger.error({ err }, 'Error reading IPC tasks directory');
     }
 
     setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
   };
 
   processIpcFiles();
-  logger.info('IPC watcher started (per-group namespaces)');
+  logger.info('IPC watcher started');
 }
 
-async function processTaskIpc(
-  data: {
-    type: string;
-    taskId?: string;
-    prompt?: string;
-    schedule_type?: string;
-    schedule_value?: string;
-    context_mode?: string;
-    groupFolder?: string;
-    chatJid?: string;
-    // For register_group
-    jid?: string;
-    name?: string;
-    folder?: string;
-    trigger?: string;
-    containerConfig?: RegisteredGroup['containerConfig'];
-  },
-  sourceGroup: string,  // Verified identity from IPC directory
-  isMain: boolean       // Verified from directory path
-): Promise<void> {
+async function processTaskIpc(data: {
+  type: string;
+  taskId?: string;
+  prompt?: string;
+  schedule_type?: string;
+  schedule_value?: string;
+  context_mode?: string;
+  chatJid?: string;
+}): Promise<void> {
   // Import db functions dynamically to avoid circular deps
   const { createTask, updateTask, deleteTask, getTaskById: getTask } = await import('./db.js');
   const { CronExpressionParser } = await import('cron-parser');
 
   switch (data.type) {
-    case 'schedule_task':
-      if (data.prompt && data.schedule_type && data.schedule_value && data.groupFolder) {
-        // Authorization: non-main groups can only schedule for themselves
-        const targetGroup = data.groupFolder;
-        if (!isMain && targetGroup !== sourceGroup) {
-          logger.warn({ sourceGroup, targetGroup }, 'Unauthorized schedule_task attempt blocked');
-          break;
+    case 'schedule_task': {
+      if (!data.prompt || !data.schedule_type || !data.schedule_value) return;
+      const scheduleType = data.schedule_type as 'cron' | 'interval' | 'once';
+
+      let nextRun: string | null = null;
+      if (scheduleType === 'cron') {
+        try {
+          const interval = CronExpressionParser.parse(data.schedule_value, { tz: TIMEZONE });
+          nextRun = interval.next().toISOString();
+        } catch {
+          logger.warn({ scheduleValue: data.schedule_value }, 'Invalid cron expression');
+          return;
         }
-
-        // Resolve the correct JID for the target group (don't trust IPC payload)
-        const targetJid = Object.entries(registeredGroups).find(
-          ([, group]) => group.folder === targetGroup
-        )?.[0];
-
-        if (!targetJid) {
-          logger.warn({ targetGroup }, 'Cannot schedule task: target group not registered');
-          break;
+      } else if (scheduleType === 'interval') {
+        const ms = parseInt(data.schedule_value, 10);
+        if (isNaN(ms) || ms <= 0) {
+          logger.warn({ scheduleValue: data.schedule_value }, 'Invalid interval');
+          return;
         }
-
-        const scheduleType = data.schedule_type as 'cron' | 'interval' | 'once';
-
-        let nextRun: string | null = null;
-        if (scheduleType === 'cron') {
-          try {
-            const interval = CronExpressionParser.parse(data.schedule_value, { tz: TIMEZONE });
-            nextRun = interval.next().toISOString();
-          } catch {
-            logger.warn({ scheduleValue: data.schedule_value }, 'Invalid cron expression');
-            break;
-          }
-        } else if (scheduleType === 'interval') {
-          const ms = parseInt(data.schedule_value, 10);
-          if (isNaN(ms) || ms <= 0) {
-            logger.warn({ scheduleValue: data.schedule_value }, 'Invalid interval');
-            break;
-          }
-          nextRun = new Date(Date.now() + ms).toISOString();
-        } else if (scheduleType === 'once') {
-          const scheduled = new Date(data.schedule_value);
-          if (isNaN(scheduled.getTime())) {
-            logger.warn({ scheduleValue: data.schedule_value }, 'Invalid timestamp');
-            break;
-          }
-          nextRun = scheduled.toISOString();
+        nextRun = new Date(Date.now() + ms).toISOString();
+      } else if (scheduleType === 'once') {
+        const scheduled = new Date(data.schedule_value);
+        if (isNaN(scheduled.getTime())) {
+          logger.warn({ scheduleValue: data.schedule_value }, 'Invalid timestamp');
+          return;
         }
-
-        const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const contextMode = (data.context_mode === 'group' || data.context_mode === 'isolated')
-          ? data.context_mode
-          : 'isolated';
-        createTask({
-          id: taskId,
-          group_folder: targetGroup,
-          chat_jid: targetJid,
-          prompt: data.prompt,
-          schedule_type: scheduleType,
-          schedule_value: data.schedule_value,
-          context_mode: contextMode,
-          next_run: nextRun,
-          status: 'active',
-          created_at: new Date().toISOString()
-        });
-        logger.info({ taskId, sourceGroup, targetGroup, contextMode }, 'Task created via IPC');
+        nextRun = scheduled.toISOString();
       }
-      break;
 
-    case 'pause_task':
-      if (data.taskId) {
-        const task = getTask(data.taskId);
-        if (task && (isMain || task.group_folder === sourceGroup)) {
-          updateTask(data.taskId, { status: 'paused' });
-          logger.info({ taskId: data.taskId, sourceGroup }, 'Task paused via IPC');
-        } else {
-          logger.warn({ taskId: data.taskId, sourceGroup }, 'Unauthorized task pause attempt');
-        }
-      }
-      break;
-
-    case 'resume_task':
-      if (data.taskId) {
-        const task = getTask(data.taskId);
-        if (task && (isMain || task.group_folder === sourceGroup)) {
-          updateTask(data.taskId, { status: 'active' });
-          logger.info({ taskId: data.taskId, sourceGroup }, 'Task resumed via IPC');
-        } else {
-          logger.warn({ taskId: data.taskId, sourceGroup }, 'Unauthorized task resume attempt');
-        }
-      }
-      break;
-
-    case 'cancel_task':
-      if (data.taskId) {
-        const task = getTask(data.taskId);
-        if (task && (isMain || task.group_folder === sourceGroup)) {
-          deleteTask(data.taskId);
-          logger.info({ taskId: data.taskId, sourceGroup }, 'Task cancelled via IPC');
-        } else {
-          logger.warn({ taskId: data.taskId, sourceGroup }, 'Unauthorized task cancel attempt');
-        }
-      }
-      break;
-
-    case 'refresh_groups':
-      // Only main group can request a refresh
-      if (isMain) {
-        logger.info({ sourceGroup }, 'Group metadata refresh requested via IPC');
-        // Write updated snapshot immediately
-        const availableGroups = getAvailableGroups();
-        const { writeGroupsSnapshot: writeGroups } = await import('./container-runner.js');
-        writeGroups(sourceGroup, true, availableGroups, new Set(Object.keys(registeredGroups)));
-      } else {
-        logger.warn({ sourceGroup }, 'Unauthorized refresh_groups attempt blocked');
-      }
-      break;
-
-    case 'register_group':
-      // Only main group can register new groups
-      if (!isMain) {
-        logger.warn({ sourceGroup }, 'Unauthorized register_group attempt blocked');
-        break;
-      }
-      if (data.jid && data.name && data.folder && data.trigger) {
-        registerGroup(data.jid, {
-          name: data.name,
-          folder: data.folder,
-          trigger: data.trigger,
-          added_at: new Date().toISOString(),
-          containerConfig: data.containerConfig
-        });
-      } else {
-        logger.warn({ data }, 'Invalid register_group request - missing required fields');
-      }
-      break;
-
+      const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const contextMode = (data.context_mode === 'group' || data.context_mode === 'isolated')
+        ? data.context_mode
+        : 'isolated';
+      createTask({
+        id: taskId,
+        group_folder: MAIN_GROUP.folder,
+        chat_jid: ownerChatJid,
+        prompt: data.prompt,
+        schedule_type: scheduleType,
+        schedule_value: data.schedule_value,
+        context_mode: contextMode,
+        next_run: nextRun,
+        status: 'active',
+        created_at: new Date().toISOString()
+      });
+      logger.info({ taskId, contextMode }, 'Task created via IPC');
+      return;
+    }
+    case 'pause_task': {
+      if (!data.taskId) return;
+      const task = getTask(data.taskId);
+      if (!task || task.group_folder !== MAIN_GROUP.folder) return;
+      updateTask(data.taskId, { status: 'paused' });
+      logger.info({ taskId: data.taskId }, 'Task paused via IPC');
+      return;
+    }
+    case 'resume_task': {
+      if (!data.taskId) return;
+      const task = getTask(data.taskId);
+      if (!task || task.group_folder !== MAIN_GROUP.folder) return;
+      updateTask(data.taskId, { status: 'active' });
+      logger.info({ taskId: data.taskId }, 'Task resumed via IPC');
+      return;
+    }
+    case 'cancel_task': {
+      if (!data.taskId) return;
+      const task = getTask(data.taskId);
+      if (!task || task.group_folder !== MAIN_GROUP.folder) return;
+      deleteTask(data.taskId);
+      logger.info({ taskId: data.taskId }, 'Task cancelled via IPC');
+      return;
+    }
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
   }
-}
-
-function parseEnvList(value?: string): Set<string> {
-  if (!value) return new Set();
-  return new Set(
-    value
-      .split(',')
-      .map(item => item.trim())
-      .filter(Boolean)
-  );
-}
-
-function isAllowedTelegramSender(ctx: any): boolean {
-  const allowedIds = parseEnvList(process.env.TELEGRAM_ALLOWED_USER_IDS);
-  const allowedNames = parseEnvList(process.env.TELEGRAM_ALLOWED_USERNAMES);
-
-  if (allowedIds.size === 0 && allowedNames.size === 0) return true;
-
-  const senderId = ctx.from?.id ? String(ctx.from.id) : '';
-  const senderUsername = ctx.from?.username ? String(ctx.from.username) : '';
-
-  if (senderId && allowedIds.has(senderId)) return true;
-  if (senderUsername && allowedNames.has(senderUsername)) return true;
-  return false;
 }
 
 async function startTelegramBot(): Promise<void> {
@@ -805,41 +726,23 @@ async function startTelegramBot(): Promise<void> {
   telegramBot.on('message', async (ctx) => {
     if (!ctx.message || !('text' in ctx.message)) return;
 
-    if (!isAllowedTelegramSender(ctx)) {
-      logger.warn({ chatId: ctx.chat?.id }, 'Telegram message from unauthorized sender ignored');
+    if (ctx.chat?.type !== 'private') return;
+
+    const senderId = ctx.from?.id ? String(ctx.from.id) : '';
+    if (!senderId || senderId !== ownerId) {
+      logger.warn({ senderId }, 'Telegram message from unauthorized sender ignored');
       return;
     }
 
     const chatId = String(ctx.chat.id);
     const chatJid = `telegram:${chatId}`;
-    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-    const senderId = String(ctx.from?.id || chatId);
-    const senderName = ctx.from?.first_name || ctx.from?.username || 'User';
-    const chatName = ctx.chat.type === 'private'
-      ? senderName
-      : (ctx.chat.title || senderName);
-
-    const timestamp = new Date(ctx.message.date * 1000).toISOString();
-
-    storeChatMetadata(chatJid, timestamp, chatName);
-
-    if (!registeredGroups[chatJid]) {
-      const autoRegisterEnabled = process.env.TELEGRAM_AUTO_REGISTER !== 'false';
-      const isFirstRegistration = Object.keys(registeredGroups).length === 0;
-
-      if (autoRegisterEnabled && !isGroup && isFirstRegistration) {
-        registerGroup(chatJid, {
-          name: 'main',
-          folder: MAIN_GROUP_FOLDER,
-          trigger: `@${ASSISTANT_NAME}`,
-          added_at: new Date().toISOString()
-        });
-        logger.info({ chatJid }, 'Auto-registered first Telegram DM as main');
-      } else {
-        logger.info({ chatJid }, 'Message from unregistered Telegram chat ignored');
-        return;
-      }
+    if (chatJid !== ownerChatJid) {
+      logger.warn({ chatJid }, 'Telegram message from unexpected chat ignored');
+      return;
     }
+
+    const senderName = ctx.from?.first_name || ctx.from?.username || 'User';
+    const timestamp = new Date(ctx.message.date * 1000).toISOString();
 
     storeMessage({
       id: `${chatId}:${ctx.message.message_id}`,
@@ -858,35 +761,23 @@ async function startTelegramBot(): Promise<void> {
       logger.error({ error }, 'Failed to start Telegram bot');
       process.exit(1);
     });
-
-  process.once('SIGINT', () => {
-    logger.info('Shutting down Telegram bot');
-    telegramBot.stop('SIGINT');
-  });
-  process.once('SIGTERM', () => {
-    logger.info('Shutting down Telegram bot');
-    telegramBot.stop('SIGTERM');
-  });
 }
 
 async function startMessageLoop(): Promise<void> {
-  logger.info(`NanoClaw running (trigger: @${ASSISTANT_NAME})`);
+  logger.info(`NanoClaw running for owner ${ownerChatJid}`);
 
-  while (true) {
+  while (!shuttingDown) {
     try {
-      const jids = Object.keys(registeredGroups);
-      const { messages } = getNewMessages(jids, lastTimestamp);
+      const { messages } = getNewMessages([ownerChatJid], lastTimestamp);
 
       if (messages.length > 0) logger.info({ count: messages.length }, 'New messages');
       for (const msg of messages) {
         try {
           await processMessage(msg);
-          // Only advance timestamp after successful processing for at-least-once delivery
           lastTimestamp = msg.timestamp;
           saveState();
         } catch (err) {
           logger.error({ err, msg: msg.id }, 'Error processing message, will retry');
-          // Stop processing this batch - failed message will be retried next loop
           break;
         }
       }
@@ -908,14 +799,6 @@ function ensureContainerSystemRunning(): void {
       logger.info('Apple Container system started');
     } catch (err) {
       logger.error({ err }, 'Failed to start Apple Container system');
-      console.error('\n╔════════════════════════════════════════════════════════════════╗');
-      console.error('║  FATAL: Apple Container system failed to start                 ║');
-      console.error('║                                                                ║');
-      console.error('║  Agents cannot run without Apple Container. To fix:           ║');
-      console.error('║  1. Install from: https://github.com/apple/container/releases ║');
-      console.error('║  2. Run: container system start                               ║');
-      console.error('║  3. Restart NanoClaw                                          ║');
-      console.error('╚════════════════════════════════════════════════════════════════╝\n');
       throw new Error('Apple Container system is required but failed to start');
     }
   }
@@ -936,16 +819,39 @@ function ensureCodexAuthSeeded(): void {
 }
 
 async function main(): Promise<void> {
+  ownerId = loadOwnerId();
+  ownerChatJid = `telegram:${ownerId}`;
+
+  const releaseLock = acquireSingleInstanceLock(path.join(DATA_DIR, 'nanoclaw.lock'));
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info({ signal }, 'Shutting down NanoClaw');
+    try {
+      telegramBot?.stop(signal);
+    } catch {
+    }
+    try {
+      releaseLock();
+    } catch {
+    }
+    process.exit(0);
+  };
+
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
   loadState();
   ensureCodexAuthSeeded();
+
   await startTelegramBot();
   startSchedulerLoop({
     sendMessage,
-    registeredGroups: () => registeredGroups,
-    getSessions: () => sessions
+    getSessions: () => sessions,
+    group: MAIN_GROUP
   });
   startIpcWatcher();
   startMessageLoop();

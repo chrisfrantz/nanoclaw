@@ -81,7 +81,7 @@ A personal Codex assistant accessible via Telegram, with minimal custom code.
 **Implementation approach:**
 - Use existing tools (Telegram bot, Codex CLI, IPC actions)
 - Minimal glue code
-- File-based systems where possible (MEMORY.md for memory, folders for groups)
+- File-based systems where possible (MEMORY.md for memory, `data/` for local state)
 
 ---
 
@@ -89,20 +89,17 @@ A personal Codex assistant accessible via Telegram, with minimal custom code.
 
 ### Message Routing
 - A router listens to Telegram and routes messages based on configuration
-- Only messages from registered groups are processed
-- Trigger: `@Andy` prefix (case insensitive), configurable via `ASSISTANT_NAME` env var
-- Unregistered groups are ignored completely
+- Only messages from the configured owner account are processed (single private DM)
+- Optional trigger prefix: `@Andy` (case insensitive), configurable via `ASSISTANT_NAME` env var
 
 ### Memory System
-- **Per-group memory**: Each group has a folder with its own `MEMORY.md`
-- **Global memory**: Root `MEMORY.md` is read by all groups, but only writable from "main" (self-chat)
-- **Files**: Groups can create/read files in their folder and reference them
-- **Local-only notes**: Each group also has a persistent, gitignored notes directory at `data/notes/{group}/` (mounted at `/workspace/notes`) for running logs and scratchpads
-- Agent runs in the group's folder, and reads both MEMORY.md files for context
+- **Single memory file**: `groups/main/MEMORY.md` is the assistant’s long-term memory
+- **Local-only notes**: Persistent, gitignored notes at `data/notes/main/` (mounted at `/workspace/notes`) for running logs and scratchpads
+- **Files**: The agent can create/read files under `groups/main/` for durable project artifacts
 
 ### Session Management
-- Each group maintains a conversation session (via Codex CLI resume)
-- Sessions rely on Codex CLI resume; summarize important context into MEMORY.md for long-term retention
+- Continuity comes from the host sending the **recent chat history** (plus lightweight retrieval hits) into each Codex prompt.
+- Codex CLI state is mounted at `data/sessions/main/.codex/` → `/home/node/.codex`, but long-term retention should still be captured in `groups/main/MEMORY.md`.
 
 ### Container Isolation
 - All agents run inside Apple Container (lightweight Linux VMs)
@@ -112,27 +109,12 @@ A personal Codex assistant accessible via Telegram, with minimal custom code.
 - Browser automation via agent-browser with Chromium in the container
 
 ### Scheduled Tasks
-- Users can ask Codex to schedule recurring or one-time tasks from any group
-- Tasks run as full agents in the context of the group that created them
+- Users can ask Codex to schedule recurring or one-time tasks
+- Tasks run as full agents in the same main chat context
 - Tasks have access to all tools including Bash (safe in container)
-- Tasks can optionally send messages to their group via `send_message` tool, or complete silently
+- Tasks can optionally send messages via `send_message`, or complete silently
 - Task runs are logged to the database with duration and result
 - Schedule types: cron expressions, intervals (ms), or one-time (ISO timestamp)
-- From main: can schedule tasks for any group, view/manage all tasks
-- From other groups: can only manage that group's tasks
-
-### Group Management
-- New groups are added explicitly via the main channel
-- Groups are registered by editing `data/registered_groups.json`
-- Each group gets a dedicated folder under `groups/`
-- Groups can have additional directories mounted via `containerConfig`
-
-### Main Channel Privileges
-- Main channel is the admin/control group (typically self-chat)
-- Can write to global memory (`groups/MEMORY.md`)
-- Can schedule tasks for any group
-- Can view and manage tasks from all groups
-- Can configure additional directory mounts for any group
 
 ---
 
@@ -141,7 +123,7 @@ A personal Codex assistant accessible via Telegram, with minimal custom code.
 ### Telegram
 - Using the Telegram Bot API (Telegraf) for messaging
 - Messages stored in SQLite, polled by router
-- QR code authentication during setup
+- Token-based bot auth (BotFather)
 
 ### Scheduler
 - Built-in scheduler runs on the host, spawns containers for task execution
@@ -149,7 +131,7 @@ A personal Codex assistant accessible via Telegram, with minimal custom code.
 - Actions: `schedule_task`, `pause_task`, `resume_task`, `cancel_task`, `send_message`
 - Tasks stored in SQLite with run history
 - Scheduler loop checks for due tasks every minute
-- Tasks execute Codex CLI in containerized group context
+- Tasks execute Codex CLI in the same containerized main context
 
 ### Web Access
 - Shell tools (curl/wget) and agent-browser inside the container

@@ -20,9 +20,7 @@
               "schedule_task",
               "pause_task",
               "resume_task",
-              "cancel_task",
-              "register_group",
-              "refresh_groups"
+              "cancel_task"
             ]
           },
           "text": { "type": ["string", "null"] },
@@ -30,12 +28,7 @@
           "schedule_type": { "type": ["string", "null"], "enum": ["cron", "interval", "once", null] },
           "schedule_value": { "type": ["string", "null"] },
           "context_mode": { "type": ["string", "null"], "enum": ["group", "isolated", null] },
-          "target_group": { "type": ["string", "null"] },
-          "task_id": { "type": ["string", "null"] },
-          "jid": { "type": ["string", "null"] },
-          "name": { "type": ["string", "null"] },
-          "folder": { "type": ["string", "null"] },
-          "trigger": { "type": ["string", "null"] }
+          "task_id": { "type": ["string", "null"] }
         },
         "required": [
           "type",
@@ -44,12 +37,7 @@
           "schedule_type",
           "schedule_value",
           "context_mode",
-          "target_group",
-          "task_id",
-          "jid",
-          "name",
-          "folder",
-          "trigger"
+          "task_id"
         ]
       }
     }

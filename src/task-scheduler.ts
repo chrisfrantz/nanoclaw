@@ -15,8 +15,8 @@ const logger = pino({
 
 export interface SchedulerDependencies {
   sendMessage: (jid: string, text: string) => Promise<string | null>;
-  registeredGroups: () => Record<string, RegisteredGroup>;
   getSessions: () => Record<string, string>;
+  group: RegisteredGroup;
 }
 
 async function runTask(task: ScheduledTask, deps: SchedulerDependencies): Promise<void> {
@@ -26,26 +26,16 @@ async function runTask(task: ScheduledTask, deps: SchedulerDependencies): Promis
 
   logger.info({ taskId: task.id, group: task.group_folder }, 'Running scheduled task');
 
-  const groups = deps.registeredGroups();
-  const group = Object.values(groups).find(g => g.folder === task.group_folder);
-
-  if (!group) {
-    logger.error({ taskId: task.id, groupFolder: task.group_folder }, 'Group not found for task');
-    logTaskRun({
-      task_id: task.id,
-      run_at: new Date().toISOString(),
-      duration_ms: Date.now() - startTime,
-      status: 'error',
-      result: null,
-      error: `Group not found: ${task.group_folder}`
-    });
+  const group = deps.group;
+  if (task.group_folder !== group.folder) {
+    logger.warn({ taskId: task.id, taskGroup: task.group_folder, configuredGroup: group.folder }, 'Task group does not match configured group; skipping');
     return;
   }
 
   // Update tasks snapshot for container to read (filtered by group)
-  const isMain = task.group_folder === MAIN_GROUP_FOLDER;
+  const isMain = group.folder === MAIN_GROUP_FOLDER;
   const tasks = getAllTasks();
-  writeTasksSnapshot(task.group_folder, isMain, tasks.map(t => ({
+  writeTasksSnapshot(group.folder, isMain, tasks.map(t => ({
     id: t.id,
     groupFolder: t.group_folder,
     prompt: t.prompt,
@@ -67,7 +57,7 @@ async function runTask(task: ScheduledTask, deps: SchedulerDependencies): Promis
     const output = await runContainerAgent(group, {
       prompt: task.prompt,
       sessionId,
-      groupFolder: task.group_folder,
+      groupFolder: group.folder,
       chatJid: task.chat_jid,
       isMain,
       isScheduledTask: true,

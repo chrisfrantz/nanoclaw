@@ -141,7 +141,7 @@ export function setLastGroupSync(): void {
 
 /**
  * Store a message with full content.
- * Only call this for registered groups where message history is needed.
+ * In single-owner DM mode, this is used for the owner DM + bot replies so the host can rebuild context.
  */
 export interface StoredMessageInput {
   id: string;
