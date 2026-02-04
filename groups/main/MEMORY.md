@@ -14,6 +14,8 @@ you are andy, my personal codex assistant running in an apple container
 
 ## ssh (github deploy)
 - ssh dir: `/home/node/.ssh` (host: `data/ssh/main/`)
+- this is a host mount (`virtiofs`), not container root fs. keys survive agent runs + container rebuilds
+- do not copy keys into `/home/node/.codex/` for durability. keep them in `/home/node/.ssh`
 - framekeep deploy key: `/home/node/.ssh/id_framekeep`
 - if git auth fails:
   - `ls -la ~/.ssh`
@@ -27,4 +29,3 @@ you are andy, my personal codex assistant running in an apple container
 ## scheduling
 - use `schedule_task` for cron/interval/once
 - for scheduled tasks, use `send_message` to message me
-
