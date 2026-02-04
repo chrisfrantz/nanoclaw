@@ -26,6 +26,35 @@ const logger = pino({
 let warnedMissingAgentRunnerDist = false;
 let warnedMissingCodexAuth = false;
 
+function hardenSshDirPermissions(sshDir: string): void {
+  try {
+    fs.chmodSync(sshDir, 0o700);
+  } catch {
+    return;
+  }
+
+  try {
+    const entries = fs.readdirSync(sshDir);
+    for (const entry of entries) {
+      const full = path.join(sshDir, entry);
+      try {
+        const stat = fs.statSync(full);
+        if (!stat.isFile()) continue;
+        if (entry === 'known_hosts' || entry === 'config') {
+          fs.chmodSync(full, 0o600);
+          continue;
+        }
+        // Private keys are typically id_* (deploy keys). Public keys end with .pub.
+        if (entry.startsWith('id_') && !entry.endsWith('.pub')) {
+          fs.chmodSync(full, 0o600);
+        }
+      } catch {
+      }
+    }
+  } catch {
+  }
+}
+
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
@@ -147,6 +176,19 @@ function buildVolumeMounts(
     containerPath: '/home/node/.codex',
     readonly: false
   });
+
+  // Persistent SSH config/keys for main only.
+  // NOTE: Containers are ephemeral per run. Any keys written inside the container will be lost unless mounted.
+  if (isMain) {
+    const sshDir = path.join(DATA_DIR, 'ssh', group.folder);
+    fs.mkdirSync(sshDir, { recursive: true });
+    hardenSshDirPermissions(sshDir);
+    mounts.push({
+      hostPath: sshDir,
+      containerPath: '/home/node/.ssh',
+      readonly: false
+    });
+  }
 
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC

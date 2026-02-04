@@ -125,6 +125,7 @@ Key files:
 - `src/db.ts` - SQLite operations
 - `groups/*/MEMORY.md` - Per-group memory
 - `docs/SOUL.md` - Agent voice and response guidelines
+- `docs/DEPLOY_KEYS.md` - Persistent SSH deploy keys
 
 ## FAQ
 

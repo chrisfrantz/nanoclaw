@@ -9,6 +9,9 @@ store/
 data/
 logs/
 
+# Local repos copied in for work
+repos/
+
 # Secrets
 *.keys.json
 .env
@@ -21,3 +24,8 @@ logs/
 .vscode/
 
 agents-sdk-docs
+
+# Group workspace artifacts (keep MEMORY.md tracked)
+groups/*/*.patch
+groups/*/TEST_APPLY_PATCH.txt
+groups/*/*work-*/
