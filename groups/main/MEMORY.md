@@ -54,6 +54,16 @@ Telegram supports Markdown. Keep messages clean and readable:
 
 This is the **main channel**, which has elevated privileges.
 
+## SSH Deploy Keys (GitHub)
+
+- Persistent host dir: `/workspace/project/data/ssh/main/` (bind-mounted to `/home/node/.ssh`)
+- Framekeep deploy key: `/home/node/.ssh/id_framekeep`
+- SSH config/hosts: `/home/node/.ssh/config`, `/home/node/.ssh/known_hosts`
+
+If git auth fails (`Permission denied (publickey)`), check:
+- `ls -la ~/.ssh`
+- `git ls-remote git@github.com:chrisfrantz/framekeep.git HEAD`
+
 ## Container Mounts
 
 Main has access to the entire project:

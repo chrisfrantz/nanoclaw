@@ -64,10 +64,12 @@ Messages and task operations are verified against group identity:
 
 **Mounted Credentials:**
 - Codex API key (filtered from `.env`, read-only)
+- Main-only SSH deploy keys: `data/ssh/main/` (mounted to `/home/node/.ssh`)
 
 **NOT Mounted:**
 - Telegram bot token in `.env` - host only
 - Mount allowlist - external, never mounted
+- Host `~/.ssh` - not mounted (use repo-scoped deploy keys under `data/ssh/main/`)
 - Any credentials matching blocked patterns
 
 **Credential Filtering:**
