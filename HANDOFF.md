@@ -22,6 +22,13 @@ Date: 2026-02-02
 - Deduplicated send_message actions that matched reply text to prevent double replies.
 - Added host-side IPC duplicate suppression (drops IPC message if same text was just sent) and mounted host `container/agent-runner/dist` into the container to force latest runner code; build now compiles agent-runner dist.
 
+## Update (Deploy Keys / SSH Persistence)
+Date: 2026-02-04
+
+- Mounted `data/ssh/main/` into the agent container at `/home/node/.ssh` (main only) so SSH keys persist across runs.
+- Added docs and main memory pointers for where to store deploy keys (`docs/DEPLOY_KEYS.md`, `groups/main/MEMORY.md`).
+- Rotated the `chrisfrantz/framekeep` GitHub deploy key to match the keypair stored at `data/ssh/main/id_framekeep` (old keys removed).
+
 ## Assumptions
 - Codex CLI is installed in the container via `npm install -g @openai/codex`.
 - Codex authentication uses `CODEX_API_KEY` (single env var).
