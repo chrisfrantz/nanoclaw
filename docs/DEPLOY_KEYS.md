@@ -34,3 +34,4 @@ Host github.com github.com-framekeep
 
 - Use **deploy keys** per repo where possible instead of a broad personal SSH key.
 - Keep permissions tight (`0600` for private keys). NanoClaw will try to harden permissions on startup.
+- If a repo’s `origin` is **HTTPS**, `git push/pull` may block waiting for credentials inside the container. Prefer `git@github.com:...` SSH remotes for anything the agent should access.

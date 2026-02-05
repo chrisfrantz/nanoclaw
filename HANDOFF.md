@@ -1,6 +1,6 @@
 # NanoClaw Handoff
 
-Date: 2026-02-04
+Date: 2026-02-05
 
 ## Summary (what changed)
 
@@ -14,6 +14,14 @@ Date: 2026-02-04
 - made ssh deploy keys durable across runs:
   - `data/ssh/main/` mounted at `/home/node/.ssh`
   - docs in `docs/DEPLOY_KEYS.md`
+- fixed rare “timed out running codex” hangs caused by **interactive git auth prompts**:
+  - agent runner now forces non-interactive git/ssh (`GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS=/bin/false`, `GIT_SSH_COMMAND='ssh -o BatchMode=yes'`, pagers disabled)
+  - note: repos with HTTPS `origin` will now fail fast instead of hanging; prefer SSH remotes for agent-driven pushes/pulls
+- sanitized per-session `~/.codex/config.toml` for containers to strip `mcp_servers.*` (prevents broken MCP startup noise)
+- improved debugging UX:
+  - container error logs include **stdout tail** (not just stderr)
+  - host shows “typing…” keepalive during long agent runs
+  - telegram send retries once on transient network errors / rate limits
 - added a host-side **single instance lock** to prevent telegram `409` conflicts / duplicate processing when two processes are started
 - hardened telegram polling ordering by adding a stable millisecond tie-breaker to message timestamps (prevents missing messages sent within the same second)
 - updated docs to match single-dm mode (`README.md`, `docs/SPEC.md`, `docs/SECURITY.md`, `docs/REQUIREMENTS.md`)

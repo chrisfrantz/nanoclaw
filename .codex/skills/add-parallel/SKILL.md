@@ -1,3 +1,8 @@
+---
+name: add-parallel
+description: Legacy MCP-based integration notes for Parallel AI. The Codex version of NanoClaw uses IPC actions instead of MCP.
+---
+
 # Add Parallel AI Integration
 
 Legacy MCP-based integration notes for Parallel AI. The Codex version of NanoClaw uses IPC actions instead of MCP.

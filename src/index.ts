@@ -347,9 +347,13 @@ async function processMessage(msg: NewMessage): Promise<void> {
   logger.info({ messageCount: recentMessages.length }, 'Processing message');
 
   await setTyping(msg.chat_jid, true);
+  const typingInterval = setInterval(() => {
+    void setTyping(msg.chat_jid, true);
+  }, 4000);
+
   const modelSelection = resolveModelSelection(strippedContent, msg.chat_jid, modelPrefs);
-  const response = await runAgent(prompt, msg.chat_jid, modelSelection);
-  await setTyping(msg.chat_jid, false);
+  const response = await runAgent(prompt, msg.chat_jid, modelSelection)
+    .finally(() => clearInterval(typingInterval));
 
   if (!response) return;
 
@@ -441,32 +445,56 @@ async function runAgent(
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function sendMessage(chatJid: string, text: string): Promise<string | null> {
   const chatId = getTelegramChatId(chatJid);
   if (!chatId) {
     logger.warn({ chatJid }, 'Unknown chat id format; message not sent');
     return null;
   }
-  try {
-    const sent = await telegramBot.telegram.sendMessage(chatId, text);
-    const baseSeconds = sent.date || Math.floor(Date.now() / 1000);
-    const timestamp = new Date(baseSeconds * 1000 + (sent.message_id % 1000)).toISOString();
-    trackOutgoing(chatJid, text);
-    storeMessage({
-      id: `out-${chatId}-${sent.message_id}`,
-      chatJid,
-      sender: `bot:${chatId}`,
-      senderName: ASSISTANT_NAME,
-      content: text,
-      timestamp,
-      isFromMe: true
-    });
-    logger.info({ chatJid, length: text.length }, 'Message sent');
-    return timestamp;
-  } catch (err) {
-    logger.error({ chatJid, err }, 'Failed to send message');
-    return null;
+  const maxAttempts = 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const sent = await telegramBot.telegram.sendMessage(chatId, text);
+      const baseSeconds = sent.date || Math.floor(Date.now() / 1000);
+      const timestamp = new Date(baseSeconds * 1000 + (sent.message_id % 1000)).toISOString();
+      trackOutgoing(chatJid, text);
+      storeMessage({
+        id: `out-${chatId}-${sent.message_id}`,
+        chatJid,
+        sender: `bot:${chatId}`,
+        senderName: ASSISTANT_NAME,
+        content: text,
+        timestamp,
+        isFromMe: true
+      });
+      logger.info({ chatJid, length: text.length }, 'Message sent');
+      return timestamp;
+    } catch (err) {
+      const e = err as any;
+      const isLast = attempt === maxAttempts - 1;
+      const code = String(e?.code || e?.errno || '');
+      const errorCode = Number(e?.response?.error_code);
+      const retryAfter = Number(e?.response?.parameters?.retry_after);
+
+      const retryable429 = errorCode === 429 && Number.isFinite(retryAfter) && retryAfter > 0;
+      const retryableNetwork = ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND'].includes(code);
+
+      if (isLast || (!retryable429 && !retryableNetwork)) {
+        logger.error({ chatJid, err }, 'Failed to send message');
+        return null;
+      }
+
+      const delayMs = retryable429 ? Math.min(1000 * retryAfter, 15000) : 400;
+      logger.warn({ chatJid, attempt: attempt + 1, delayMs, code, errorCode }, 'Telegram send failed; retrying');
+      await sleep(delayMs);
+    }
   }
+
+  return null;
 }
 
 function formatModelPref(pref: ModelPreference | undefined): string {

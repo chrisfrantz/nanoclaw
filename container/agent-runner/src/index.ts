@@ -187,6 +187,11 @@ function buildPrompt(input: ContainerInput): string {
     '- When the user says "remember this", update the memory file.',
     '- Use the notes directory for local-only running logs and scratch work (e.g. append to /workspace/notes/journal.md).',
     '',
+    'Execution rules:',
+    '- Avoid long-running or interactive commands (dev servers, watch modes, editors, prompts).',
+    '- Prefer bounded one-shot commands. Use timeouts for anything that might hang (e.g. `timeout 60s git ...`, `timeout 60s curl ...`).',
+    '- If work will take a long time, reply with a short plan + next step, or schedule a task.',
+    '',
     'Actions:',
     '- send_message: send a message to the current chat.',
     '- schedule_task: create a scheduled task (cron/interval/once). Use local time for "once" (no Z suffix). Include context_mode ("group" for continuous context, or "isolated" for a clean run).',
@@ -328,9 +333,21 @@ function parseAgentResponse(raw: string): AgentResponse {
 
 function runCodexCommand(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
+    const env = {
+      ...process.env,
+      // Prevent hangs on credential / passphrase prompts during git operations.
+      GIT_TERMINAL_PROMPT: process.env.GIT_TERMINAL_PROMPT ?? '0',
+      GIT_ASKPASS: process.env.GIT_ASKPASS ?? '/bin/false',
+      // Prevent SSH passphrase prompts (fails fast if key needs interaction).
+      GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -o BatchMode=yes',
+      // Avoid interactive pagers.
+      PAGER: process.env.PAGER ?? 'cat',
+      GIT_PAGER: process.env.GIT_PAGER ?? 'cat'
+    };
+
     const child = spawn('codex', args, {
       cwd: GROUP_WORKDIR,
-      env: process.env
+      env
     });
 
     let stdout = '';

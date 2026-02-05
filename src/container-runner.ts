@@ -26,6 +26,46 @@ const logger = pino({
 let warnedMissingAgentRunnerDist = false;
 let warnedMissingCodexAuth = false;
 
+function sanitizeCodexConfigToml(content: string): string {
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  const out: string[] = [];
+
+  let skippingMcpSection = false;
+  for (const line of lines) {
+    const headerMatch = /^\s*\[\[?([^\]]+)\]\]?\s*$/.exec(line);
+    if (headerMatch) {
+      const header = headerMatch[1].trim();
+      const isMcpHeader = header === 'mcp_servers' || header.startsWith('mcp_servers.');
+      if (isMcpHeader) {
+        skippingMcpSection = true;
+        continue;
+      }
+      skippingMcpSection = false;
+    }
+
+    if (skippingMcpSection) continue;
+    out.push(line);
+  }
+
+  let sanitized = out.join('\n');
+  if (!sanitized.endsWith('\n')) sanitized += '\n';
+  return sanitized;
+}
+
+function ensureSanitizedCodexConfig(targetConfigPath: string): void {
+  try {
+    if (!fs.existsSync(targetConfigPath)) return;
+    const raw = fs.readFileSync(targetConfigPath, 'utf-8');
+    const sanitized = sanitizeCodexConfigToml(raw);
+    if (sanitized !== raw) {
+      fs.writeFileSync(targetConfigPath, sanitized, { mode: 0o600 });
+      logger.info({ targetConfigPath }, 'Sanitized Codex config.toml for container (removed MCP servers)');
+    }
+  } catch (err) {
+    logger.warn({ err, targetConfigPath }, 'Failed to sanitize Codex config.toml');
+  }
+}
+
 function hardenSshDirPermissions(sshDir: string): void {
   try {
     fs.chmodSync(sshDir, 0o700);
@@ -164,6 +204,7 @@ function buildVolumeMounts(
     if (fs.existsSync(hostConfigPath) && !fs.existsSync(targetConfigPath)) {
       fs.copyFileSync(hostConfigPath, targetConfigPath);
     }
+    ensureSanitizedCodexConfig(targetConfigPath);
     if (!fs.existsSync(targetAuthPath) && !warnedMissingCodexAuth) {
       warnedMissingCodexAuth = true;
       logger.error('Codex auth missing: no CODEX_API_KEY and no ~/.codex/auth.json to seed');
@@ -399,6 +440,9 @@ export async function runContainerAgent(
           logLines.push(
             `=== Stderr (last 500 chars) ===`,
             stderr.slice(-500),
+            ``,
+            `=== Stdout (last 1000 chars) ===`,
+            stdout.slice(-1000),
             ``
           );
         }
